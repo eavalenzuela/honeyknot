@@ -26,8 +26,11 @@ def server_port_process_pool(args):
         for pc_file in config_files:
             futures.append(sppe.submit(server_port_process, pc_file, args))
         for future in as_completed(futures):
-            if args.v:
-                print('|--- port handler closed: '+str(future.result()))
+            if args.tv:
+                if future.exception():
+                    print('|--- port handler '+str(pc_file)+' exited abnormally.')
+                else:
+                    print('|--- port handler closed: '+str(future.result()))
     return futures
 
 def server_port_process(port_config_file, args):
@@ -39,7 +42,7 @@ def server_port_thread_pool(port_config, args):
     with ThreadPoolExecutor(5) as spte:
         futures = []
         for i in range(5):
-            if args.v:
+            if args.tv:
                 print('|- running port handler '+str(port_config)+', thread '+str(i))
             futures.append(spte.submit(server_port_thread, [port_config, i], args))
         while True:
@@ -48,7 +51,7 @@ def server_port_thread_pool(port_config, args):
                     print(future.result())
                 else:
                     thread_num = future.result()
-                    if args.v:
+                    if args.tv:
                         print('|- spawning replacement port handler for '\
                                 'str(port_config)'\
                                 ', thread '+str(thread_num))
@@ -58,6 +61,8 @@ def server_port_thread_pool(port_config, args):
 def server_port_thread(counters, args):
     print('|-- port handler: '+str(counters[0])+', thread: '+str(counters[1]))
     time.sleep(2)
+    # Execute hk_handler
+    hk_handler(counters[0], args)
     return counters[1]
 
 def run():
@@ -66,6 +71,7 @@ def run():
     parser.add_argument('--handler_directory', '-hd', dest='handler_dir', default='handlers/', help='path to folder containing files that define port handlers. See documentation for how to format handlers.')
     parser.add_argument('--log_directory', '-ld', dest='log_dir', default='logs/', help='path to directory to output log files to. Each service port will have its own logfile.')
     parser.add_argument('-v', action='store_true', default=False, help='enable verbose output')
+    parser.add_argument('-tv', action='store_true', default=False, help='enable thread verbosity')
     args = parser.parse_args()
 
     # Call main loop-handler
