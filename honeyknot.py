@@ -2,7 +2,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 import argparse
 import configparser
 import hk_handler
-import os, sys
+import os, sys, time
 
 """
 Honeyknot: The Highly-Configurable Honeypot
@@ -42,14 +42,23 @@ def server_port_thread_pool(port_config, args):
             if args.v:
                 print('|- running port handler '+str(port_config)+', thread '+str(i))
             futures.append(spte.submit(server_port_thread, [port_config, i], args))
-        for future in as_completed(futures):
-            if future.exception():
-                print(future.result())
+        while True:
+            for future in as_completed(futures):
+                if future.exception():
+                    print(future.result())
+                else:
+                    thread_num = future.result()
+                    if args.v:
+                        print('|- spawning replacement port handler for '\
+                                'str(port_config)'\
+                                ', thread '+str(thread_num))
+                    futures.append(spte.submit(server_port_thread, [port_config, thread_num], args))
     return futures
 
 def server_port_thread(counters, args):
     print('|-- port handler: '+str(counters[0])+', thread: '+str(counters[1]))
-    return 0
+    time.sleep(2)
+    return counters[1]
 
 def run():
     # Argument Processing
