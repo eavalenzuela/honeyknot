@@ -46,7 +46,7 @@ def server_port_thread_pool(port_config, args):
         try:
             conn_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             conn_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            conn_sock.bind((args.bind_ip, 8080))
+            conn_sock.bind((args.bind_ip, int(port_config)))
         except Exception as se:
             print('socket construction error: ')
             print(se)

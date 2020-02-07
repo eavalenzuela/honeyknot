@@ -5,7 +5,7 @@ service_type=http
 ^GET / *=<html><body><h2>success</h2></body></html>
 [response_headers]
 1=HTTP/1.1 200 OK
-2=Server: SecMagik0.1
+2=Server: Honeyknot0.2
 3=Accept-Ranges: bytes
 4=Content-Type: text/html
 5=Connection: close
