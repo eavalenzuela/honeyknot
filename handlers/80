@@ -3,6 +3,7 @@ port=80
 service_type=http
 [responses]
 ^GET / *=<html><body><h2>success</h2></body></html>
+^HEAD *=
 [response_headers]
 1=HTTP/1.1 200 OK
 2=Server: Honeyknot0.2

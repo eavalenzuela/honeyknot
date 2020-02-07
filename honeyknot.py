@@ -13,6 +13,22 @@ Ports can be either HTTP, HTTPS or raw TCP. Responses are defined per-service, b
 All incoming data is saved raw(hex blob), ASCII-only, and in pcap formats.
 """
 
+def run_from_interactive_shell(ip, use_custom_args, c_args):
+    if use_custom_args:
+        args = c_args
+    else:
+        # Empty object class mimicks argparse.Namespace
+        class argContainer(object):
+            pass
+        # Instantiate and assign values
+        args = argContainer()
+        args.bind_ip = ip
+        args.handler_dir = 'handlers/'
+        args.log_dir = 'logs/'
+        args.v = False
+        args.tv = False
+    main_loop(args)
+
 def main_loop(args):
     proc_pool_futures = server_port_process_pool(args)
     return proc_pool_futures
@@ -58,7 +74,14 @@ def server_port_thread_pool(port_config, args):
             futures.append(spte.submit(server_port_thread, [port_config, i], None, args))
         while True:
             # Move socket to listening
-            conn_sock.listen(1)
+            while True:
+                try:
+                    conn_sock.listen(1)
+                    break
+                except Exception as e:
+                    print('socket listen_state exception')
+                    time.sleep(5)
+                    continue
 
             # Grab idle thread
             for future in as_completed(futures):
@@ -72,21 +95,42 @@ def server_port_thread_pool(port_config, args):
                                 ', thread '+str(thread_num))
                     
                     # Feed incoming request to idle thread
-                    client_sock, client_address = conn_sock.accept()
+                    while True:
+                        try:
+                            client_sock, client_address = conn_sock.accept()
+                            break
+                        except Exception as e:
+                            print('socket accept_state exception')
+                            time.sleep(5)
+                            continue
                     print('connection from '+str(client_address)+' on port '+str(port_config))
 
-                    futures.append(spte.submit(server_port_thread, [port_config, thread_num], client_sock, args))
+                    client_info = [client_address, client_sock]
+                    futures.append(spte.submit(server_port_thread, [port_config, thread_num], client_info, args))
     return futures
 
-def server_port_thread(counters, client_connection, args):
+def server_port_thread(counters, client_info, args):
     print('|-- port handler: '+str(counters[0])+', thread: '+str(counters[1]))
     
+    client_address = client_info[0]
+    client_connection = client_info[1]
+
     # If first run, return
     if client_connection == None:
         return counters[1]
     else:
         data = client_connection.recv(2048)
-        print(data)
+        if args.v:
+            print(data)
+
+    # Log raw request data
+    logpath = args.log_dir+str(counters[0])+'.log'
+    try:
+        with open(logpath, 'a') as rl:
+            rl.write(str(client_address)+': '+str(data)+'\n')
+    except TypeError as te:
+        print(te)
+
     # Execute hk_handler
     try:
         hk_handler.hk_handler(counters[0], data, client_connection, args)
