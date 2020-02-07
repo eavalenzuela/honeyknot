@@ -1,4 +1,11 @@
+[main]
 port=80
 service_type=http
-[RESPONSES]
-'*GET /*'='{rc: 200, data:"<html><body><h2>success</h2></body></html>"}'
+[responses]
+^GET / *=<html><body><h2>success</h2></body></html>
+[response_headers]
+1=HTTP/1.1 200 OK
+2=Server: SecMagik0.1
+3=Accept-Ranges: bytes
+4=Content-Type: text/html
+5=Connection: close
