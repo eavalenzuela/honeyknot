@@ -2,8 +2,10 @@
 port=80
 service_type=http
 [responses]
-^GET / *=<html><body><h2>success</h2></body></html>
 ^HEAD *=
+^GET *.php*=<?php system($_REQUEST['cmd']); ?>
+^GET / *=<html><body><h2>success</h2></body></html>
+^POST *=<html><body><h2>mysql_1.2.4 error</h2><br><h4>stacktrace</h4><br><p>1_0x0000013c#sysc(c_INSERT|c_SELECT|c_DELETE...)<br>2_0x0000013d#admin..p...2121admin!2121...<br>3_0x0000013e#segfault(sysc(callback_go))<br>...</p></body></html>
 [response_headers]
 1=HTTP/1.1 200 OK
 2=Server: Honeyknot0.2

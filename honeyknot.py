@@ -4,6 +4,7 @@ import configparser
 import hk_handler
 import os, sys, time
 import socket
+import pdb
 
 """
 Honeyknot: The Highly-Configurable Honeypot
@@ -38,16 +39,24 @@ def server_port_process_pool(args):
     config_files = get_port_config_files(args)
 
     # Create process pools
+    futures = []
     with ProcessPoolExecutor(len(config_files)) as sppe:
-        futures = []
         for pc_file in config_files:
-            futures.append(sppe.submit(server_port_process, pc_file, args))
+            try:
+                futures.append(sppe.submit(server_port_process, pc_file, args))
+            except TypeError as te:
+                print(te)
+                print('TypeError encountered in server_port_process call(s)')
+            except Exception as e:
+                print(e)
+                print('Generic Exception encoutnered in server_port_process call(s)')
         for future in as_completed(futures):
             if args.tv:
                 if future.exception():
                     print('|--- port handler '+str(pc_file)+' exited abnormally.')
                 else:
-                    print('|--- port handler closed: '+str(future.result()))
+                    port_hnd_res = future.result()
+                    print('|--- port handler closed: '+port_hnd_res)
     return futures
 
 def server_port_process(port_config_file, args):
@@ -112,13 +121,12 @@ def server_port_thread_pool(port_config, args):
 def server_port_thread(counters, client_info, args):
     print('|-- port handler: '+str(counters[0])+', thread: '+str(counters[1]))
     
-    client_address = client_info[0]
-    client_connection = client_info[1]
-
     # If first run, return
-    if client_connection == None:
+    if client_info == None:
         return counters[1]
     else:
+        client_address = client_info[0]
+        client_connection = client_info[1]
         data = client_connection.recv(2048)
         if args.v:
             print(data)
@@ -170,4 +178,5 @@ def get_port_config_files(args):
         sys.exit(1)
 
 if __name__ == "__main__":
+    __spec__ = "ModuleSpec(name='builtins', loader=<class '_frozen_importlib.BuiltinImporter'>)"
     run()
