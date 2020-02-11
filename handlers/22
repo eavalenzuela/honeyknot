@@ -1,0 +1,4 @@
+[main]
+port=22
+service_type=tcp
+definition_file=ssh.json
