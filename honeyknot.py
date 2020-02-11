@@ -25,6 +25,8 @@ def run_from_interactive_shell(ip, use_custom_args, c_args):
         args = argContainer()
         args.bind_ip = ip
         args.handler_dir = 'handlers/'
+        args.definition_dir = 'definition_files/'
+        args.thread_count = 5
         args.log_dir = 'logs/'
         args.v = False
         args.tv = False
@@ -39,6 +41,7 @@ def server_port_process_pool(args):
     config_files = get_port_config_files(args)
 
     # Create process pools
+    error_mssg = None
     futures = []
     with ProcessPoolExecutor(len(config_files)) as sppe:
         for pc_file in config_files:
@@ -52,18 +55,24 @@ def server_port_process_pool(args):
                 print('Generic Exception encoutnered in server_port_process call(s)')
         for future in as_completed(futures):
             if args.tv:
+                port_hnd_res = future.result()
                 if future.exception():
                     print('|--- port handler '+str(pc_file)+' exited abnormally.')
+                    error_mssg = future.result()[2]
+                    if error_mssg != None:
+                        print('|--- port handler '+str(pc_file)+' error_mssg:')
+                        print('|--- '+port_hnd_res[1])
                 else:
-                    port_hnd_res = future.result()
-                    print('|--- port handler closed: '+port_hnd_res)
+                    print('|--- port handler closed: '+port_hnd_res[0])
     return futures
 
 def server_port_process(port_config_file, args):
-    rsp = server_port_thread_pool(port_config_file, args)
+    rsp, error_mssg = server_port_thread_pool(port_config_file, args)
+    hk_handler.write_error(error_mssg, port_config_file, args)
     return port_config_file
 
 def server_port_thread_pool(port_config, args):
+    error_mssg = None
     # Get port number from port_config file
     cfg = configparser.ConfigParser()
     try:
@@ -73,6 +82,25 @@ def server_port_thread_pool(port_config, args):
         print('Error retrieving port number from config file: '+str(port_config))
         print(e)
         sys.exit(1)
+
+    #####
+    # hk_handler module thread-internal functions testing
+    #####
+    # hk_handler() function testing
+    """
+    dummy_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    dummy_conn.bind((args.bind_ip, 9999))
+    dummy_conn.listen(1)
+    dummy_conn, addr = dummy_conn.accept()
+    dc_data = dummy_conn.recv(2048)
+    print(hk_handler.hk_handler(port_config, 'GET /huehuehue.php', dc_data, args))
+    """
+    # get_port_config_settings() function testing
+    """
+    print(hk_handler.get_port_config_settings(port_config, args))
+    """
+    #####
+
     # Create thread pool
     with ThreadPoolExecutor(int(args.thread_count)) as spte:
         # Create socket
@@ -86,10 +114,10 @@ def server_port_thread_pool(port_config, args):
             print(se)
             sys.exit(1)
         futures = []
-        for i in range(int(args.thread_count)):
+        for thread_num in range(int(args.thread_count)):
             if args.tv:
-                print('|- running port handler '+str(port_config)+', thread '+str(i))
-            futures.append(spte.submit(server_port_thread, [port_config, i], None, args))
+                print('|- running port handler '+str(port_config)+', thread '+str(thread_num))
+            futures.append(spte.submit(server_port_thread, port_config, thread_num, None, args))
         while True:
             # Move socket to listening
             while True:
@@ -102,11 +130,14 @@ def server_port_thread_pool(port_config, args):
                     continue
 
             # Grab idle thread
+            if args.v:
+                print('Grabbing idle thread for connection processing...')
             for future in as_completed(futures):
                 if future.exception():
                     print(future.result())
                 else:
-                    thread_num = future.result()
+                    thread_num = future.result()[0]
+                    error_mssg = future.result()[1]
                     if args.tv:
                         print('|- spawning replacement port handler for '\
                                 'str(port_config)'\
@@ -118,21 +149,23 @@ def server_port_thread_pool(port_config, args):
                             client_sock, client_address = conn_sock.accept()
                             break
                         except Exception as e:
-                            print('socket accept_state exception')
                             time.sleep(5)
                             continue
                     print('connection from '+str(client_address)+' on port '+str(port_config))
 
                     client_info = [client_address, client_sock]
                     futures.append(spte.submit(server_port_thread, port_config, thread_num, client_info, args))
-    return futures
+    hk_handler.write_error(error_mssg, port_config, args)
+    return futures, error_mssg
 
 def server_port_thread(port_config, thread_num, client_info, args):
+    error_mssg = None
     print('|-- port handler: '+str(port_config)+', thread: '+str(thread_num))
     
     # If first run, return
     if client_info == None:
-        return thread_num
+        hk_handler.write_error(error_mssg, port_config, args)
+        return thread_num, error_mssg
     else:
         client_address = client_info[0]
         client_connection = client_info[1]
@@ -146,14 +179,18 @@ def server_port_thread(port_config, thread_num, client_info, args):
         with open(logpath, 'a') as rl:
             rl.write(str(client_address)+': '+str(data)+'\n')
     except TypeError as te:
-        print(te)
+        error_mssg = 'server-port_thread(): '+str(te)
 
     # Execute hk_handler
     try:
-        hk_handler.hk_handler(port_config, data, client_connection, args)
+        error_mssg = hk_handler.hk_handler(port_config, data, client_connection, args)
+        if args.v:
+            print(error_mssg)
     except Exception as tk:
-        print(tk)
-    return thread_num
+        tk = str(tk)
+        error_mssg = 'server_port_thread(): '+tk
+    hk_handler.write_error(error_mssg, port_config, args)
+    return thread_num, error_mssg
 
 def run():
     # Argument Processing
