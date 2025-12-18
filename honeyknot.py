@@ -1,10 +1,11 @@
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import argparse
-import configparser
 import hk_handler
 import os, sys, time
 import socket
 import pdb
+
+import service_loader
 
 """
 Honeyknot: The Highly-Configurable Honeypot
@@ -13,6 +14,7 @@ honeyknot takes a response-definition file for each port you wish to run a honey
 Ports can be either HTTP, HTTPS or raw TCP. Responses are defined per-service, based on regex patterns.
 All incoming data is saved raw(hex blob), ASCII-only, and in pcap formats.
 """
+
 
 def run_from_interactive_shell(ip, use_custom_args, c_args):
     if use_custom_args:
@@ -30,23 +32,48 @@ def run_from_interactive_shell(ip, use_custom_args, c_args):
         args.log_dir = 'logs/'
         args.v = False
         args.tv = False
+        args.service_schema = None
+        args.export_schema = None
     main_loop(args)
+
 
 def main_loop(args):
     proc_pool_futures = server_port_process_pool(args)
     return proc_pool_futures
 
+
+def _load_services(args):
+    services = service_loader.load_service_definitions(
+        args.service_schema, args.handler_dir, args.definition_dir, args.v
+    )
+    # Allow a CLI bind_ip override
+    for service in services:
+        if args.bind_ip:
+            service.bind_ip = args.bind_ip
+        elif not service.bind_ip:
+            service.bind_ip = '0.0.0.0'
+    return services
+
+
 def server_port_process_pool(args):
-    # Get port config files in handler_dir
-    config_files = get_port_config_files(args)
+    # Optionally perform a one-off migration from handler files to a schema
+    if args.export_schema:
+        service_loader.write_schema_from_handlers(args.handler_dir, args.definition_dir, args.export_schema)
+        print(f"Legacy handler files exported to {args.export_schema}")
+        return []
+
+    services = _load_services(args)
+    if not services:
+        print('No configuration files found in target directory or schema. Exiting.')
+        sys.exit(1)
 
     # Create process pools
     error_mssg = None
     futures = []
-    with ProcessPoolExecutor(len(config_files)) as sppe:
-        for pc_file in config_files:
+    with ProcessPoolExecutor(len(services)) as sppe:
+        for service in services:
             try:
-                futures.append(sppe.submit(server_port_process, pc_file, args))
+                futures.append(sppe.submit(server_port_process, service, args))
             except TypeError as te:
                 print(te)
                 print('TypeError encountered in server_port_process call(s)')
@@ -57,49 +84,25 @@ def server_port_process_pool(args):
             if args.tv:
                 port_hnd_res = future.result()
                 if future.exception():
-                    print('|--- port handler '+str(pc_file)+' exited abnormally.')
+                    print('|--- port handler '+str(port_hnd_res)+' exited abnormally.')
                     error_mssg = future.result()[2]
                     if error_mssg != None:
-                        print('|--- port handler '+str(pc_file)+' error_mssg:')
+                        print('|--- port handler '+str(port_hnd_res)+' error_mssg:')
                         print('|--- '+port_hnd_res[1])
                 else:
-                    print('|--- port handler closed: '+port_hnd_res[0])
+                    print('|--- port handler closed: '+str(port_hnd_res))
     return futures
 
-def server_port_process(port_config_file, args):
-    rsp, error_mssg = server_port_thread_pool(port_config_file, args)
-    hk_handler.write_error(error_mssg, port_config_file, args)
-    return port_config_file
 
-def server_port_thread_pool(port_config, args):
+def server_port_process(service, args):
+    rsp, error_mssg = server_port_thread_pool(service, args)
+    hk_handler.write_error(error_mssg, service.port, args)
+    return service.port
+
+
+def server_port_thread_pool(service, args):
     error_mssg = None
-    # Get port number from port_config file
-    cfg = configparser.ConfigParser()
-    try:
-        cfg.read(args.handler_dir+str(port_config))
-        socket_port = cfg['main']['port']
-    except Exception as e:
-        print('Error retrieving port number from config file: '+str(port_config))
-        print(e)
-        sys.exit(1)
-
-    #####
-    # hk_handler module thread-internal functions testing
-    #####
-    # hk_handler() function testing
-    """
-    dummy_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    dummy_conn.bind((args.bind_ip, 9999))
-    dummy_conn.listen(1)
-    dummy_conn, addr = dummy_conn.accept()
-    dc_data = dummy_conn.recv(2048)
-    print(hk_handler.hk_handler(port_config, 'GET /huehuehue.php', dc_data, args))
-    """
-    # get_port_config_settings() function testing
-    """
-    print(hk_handler.get_port_config_settings(port_config, args))
-    """
-    #####
+    socket_port = service.port
 
     # Create thread pool
     with ThreadPoolExecutor(int(args.thread_count)) as spte:
@@ -108,7 +111,7 @@ def server_port_thread_pool(port_config, args):
         try:
             conn_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             conn_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            conn_sock.bind((args.bind_ip, int(socket_port)))
+            conn_sock.bind((service.bind_ip, int(socket_port)))
         except Exception as se:
             print('socket construction error: ')
             print(se)
@@ -116,8 +119,8 @@ def server_port_thread_pool(port_config, args):
         futures = []
         for thread_num in range(int(args.thread_count)):
             if args.tv:
-                print('|- running port handler '+str(port_config)+', thread '+str(thread_num))
-            futures.append(spte.submit(server_port_thread, port_config, thread_num, None, args))
+                print('|- running port handler '+str(socket_port)+', thread '+str(thread_num))
+            futures.append(spte.submit(server_port_thread, service, thread_num, None, args))
         while True:
             # Move socket to listening
             while True:
@@ -139,10 +142,8 @@ def server_port_thread_pool(port_config, args):
                     thread_num = future.result()[0]
                     error_mssg = future.result()[1]
                     if args.tv:
-                        print('|- spawning replacement port handler for '\
-                                'str(port_config)'\
-                                ', thread '+str(thread_num))
-                    
+                        print('|- spawning replacement port handler for '+str(socket_port)+', thread '+str(thread_num))
+
                     # Feed incoming request to idle thread
                     while True:
                         try:
@@ -151,20 +152,21 @@ def server_port_thread_pool(port_config, args):
                         except Exception as e:
                             time.sleep(5)
                             continue
-                    print('connection from '+str(client_address)+' on port '+str(port_config))
+                    print('connection from '+str(client_address)+' on port '+str(socket_port))
 
                     client_info = [client_address, client_sock]
-                    futures.append(spte.submit(server_port_thread, port_config, thread_num, client_info, args))
-    hk_handler.write_error(error_mssg, port_config, args)
+                    futures.append(spte.submit(server_port_thread, service, thread_num, client_info, args))
+    hk_handler.write_error(error_mssg, service.port, args)
     return futures, error_mssg
 
-def server_port_thread(port_config, thread_num, client_info, args):
+
+def server_port_thread(service, thread_num, client_info, args):
     error_mssg = None
-    print('|-- port handler: '+str(port_config)+', thread: '+str(thread_num))
-    
+    print('|-- port handler: '+str(service.port)+', thread: '+str(thread_num))
+
     # If first run, return
     if client_info == None:
-        hk_handler.write_error(error_mssg, port_config, args)
+        hk_handler.write_error(error_mssg, service.port, args)
         return thread_num, error_mssg
     else:
         client_address = client_info[0]
@@ -174,7 +176,7 @@ def server_port_thread(port_config, thread_num, client_info, args):
             print(data)
 
     # Log raw request data
-    logpath = args.log_dir+str(port_config)+'.log'
+    logpath = args.log_dir+str(service.port)+'.log'
     try:
         with open(logpath, 'a') as rl:
             rl.write(str(client_address)+': '+str(data)+'\n')
@@ -183,14 +185,15 @@ def server_port_thread(port_config, thread_num, client_info, args):
 
     # Execute hk_handler
     try:
-        error_mssg = hk_handler.hk_handler(port_config, data, client_connection, args)
+        error_mssg = hk_handler.hk_handler(service, data, client_connection, args)
         if args.v:
             print(error_mssg)
     except Exception as tk:
         tk = str(tk)
         error_mssg = 'server_port_thread(): '+tk
-    hk_handler.write_error(error_mssg, port_config, args)
+    hk_handler.write_error(error_mssg, service.port, args)
     return thread_num, error_mssg
+
 
 def run():
     # Argument Processing
@@ -198,6 +201,8 @@ def run():
     parser.add_argument('-i', '--bind_ip', dest='bind_ip', help='IP address of interface to bind sockets to')
     parser.add_argument('--handler_directory', '-hd', dest='handler_dir', default='handlers/', help='path to folder containing files that define port handlers. See documentation for how to format handlers.')
     parser.add_argument('--definitions_directory', '-dd', dest='definition_dir', default='definition_files', help='path to folder containing service definiton json files')
+    parser.add_argument('--service_schema', '-ss', dest='service_schema', default=None, help='path to a consolidated service schema (JSON or YAML)')
+    parser.add_argument('--export_schema', '-es', dest='export_schema', default=None, help='write a consolidated schema (JSON) from legacy handler files then exit')
     parser.add_argument('--log_directory', '-ld', dest='log_dir', default='logs/', help='path to folder to output log files to. Each service port will have its own logfile.')
     parser.add_argument('-v', action='store_true', default=False, help='enable verbose output')
     parser.add_argument('-tv', action='store_true', default=False, help='enable thread verbosity')
@@ -207,6 +212,7 @@ def run():
     # Call main loop-handler
     main_loop(args)
     return
+
 
 def get_port_config_files(args):
     try:
@@ -224,6 +230,7 @@ def get_port_config_files(args):
         print(e)
         print('Configuration file enumeration failed. Exiting.')
         sys.exit(1)
+
 
 if __name__ == "__main__":
     __spec__ = "ModuleSpec(name='builtins', loader=<class '_frozen_importlib.BuiltinImporter'>)"
