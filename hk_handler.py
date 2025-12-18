@@ -3,22 +3,40 @@ import os
 import configparser
 import re
 import json
+from datetime import datetime
 
-def write_error(error_mssg, port_config, args):
+
+def write_error(error_mssg, port_config, args, error_logger=None):
     if error_mssg != None:
-        with open(args.log_dir+str(port_config)+'_errors.log', 'a') as logfile:
-            logfile.write(error_mssg+'\n')
+        log_entry = {
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'port': port_config,
+            'error': error_mssg,
+        }
+        if error_logger:
+            error_logger.error(json.dumps(log_entry))
+        else:
+            error_path = os.path.join(args.log_dir, f"{port_config}_errors.log")
+            with open(error_path, 'a') as logfile:
+                logfile.write(json.dumps(log_entry)+'\n')
     return
 
-def hk_handler(port_config, data, client_connection, args):
+def hk_handler(port_config, data, client_connection, args, port_settings=None, error_logger=None):
     error_mssg = None
-    port_type, resp_dict, resp_headers, response_type, error_mssg = get_port_config_settings(port_config, args)
+
+    if port_settings:
+        port_type, resp_dict, resp_headers, response_type = port_settings
+    else:
+        port_type, resp_dict, resp_headers, response_type, error_mssg = get_port_config_settings(port_config, args)
+    
     # Check request data against responses
+    matched_rule = None
     if len(resp_dict) > 0:
         for pair in resp_dict:
             pattern = pair[0] if isinstance(pair[0], (bytes, bytearray)) else bytes(pair[0], encoding='utf-8')
             if re.match(pattern, data, re.IGNORECASE):
                 if args.v:
+
                     print(str(pair[0]) + ' match found! Sending response.')
 
                 if response_type == 'bytes':
@@ -38,12 +56,13 @@ def hk_handler(port_config, data, client_connection, args):
 
                     # Send response to client
                     client_connection.sendall(bytes(response_data, encoding='utf-8'), 0)
+
                 client_connection.close()
     else:
         error_mssg = 'hk.hk_handler: '+'No responses detected. Closing connection and returning to parent.'
     client_connection.close()
-    write_error(error_mssg, port_config, args)
-    return error_mssg
+    write_error(error_mssg, port_config, args, error_logger)
+    return error_mssg, matched_rule, port_type
 
 def json_definition_parser(json_data, args):
     """Parse a service definition file into regex/response pairs.
