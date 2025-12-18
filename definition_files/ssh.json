@@ -1,15 +1,15 @@
 {
-  "service": "ssh",
-  "service_type": "tcp",
-  "response_type": "bytes",
-  "communication_dicts": [
-    {
-      "name": "New_SSH_Connection_OpenSSH2.0",
-      "regex": "SSH-2.0-OpenSSH_*",
-      "return": {
-        "name": "OpenSSH_Server_Response",
-        "value": "SSH-2.0-OpenSSH_7.6p1 Ubuntu-4ubuntu0.3"
-      }
-    }
-  ]
+    "service": "ssh",
+    "service_type": "tcp",
+    "response_type": "bytes",
+    "communication_dicts": [
+        {
+            "name": "New_SSH_Connection_OpenSSH2.0",
+            "regex": "SSH-2.0-OpenSSH_*",
+            "return": {
+                "name": "OpenSSH_Server_Response",
+                "value": "SSH-2.0-OpenSSH_7.6p1 Ubuntu-4ubuntu0.3\r\n"
+            }
+        }
+    ]
 }

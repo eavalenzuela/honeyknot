@@ -1,35 +1,28 @@
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import argparse
 import hk_handler
-import os, sys, time
-import socket
-import pdb
 
 import service_loader
 
 """
 Honeyknot: The Highly-Configurable Honeypot
-
-honeyknot takes a response-definition file for each port you wish to run a honeypot on, which tells the service how to present itself.
-Ports can be either HTTP, HTTPS or raw TCP. Responses are defined per-service, based on regex patterns.
-All incoming data is saved raw(hex blob), ASCII-only, and in pcap formats.
 """
-
 
 def run_from_interactive_shell(ip, use_custom_args, c_args):
     if use_custom_args:
         args = c_args
     else:
-        # Empty object class mimicks argparse.Namespace
         class argContainer(object):
             pass
-        # Instantiate and assign values
+
         args = argContainer()
         args.bind_ip = ip
-        args.handler_dir = 'handlers/'
-        args.definition_dir = 'definition_files/'
+        args.handler_dir = "handlers/"
+        args.definition_dir = "definition_files/"
         args.thread_count = 5
         args.log_dir = 'logs/'
+        args.log_max_bytes = 1048576
+        args.log_backup_count = 5
+        args.capture_limit = 4096
         args.v = False
         args.tv = False
         args.service_schema = None
@@ -38,8 +31,6 @@ def run_from_interactive_shell(ip, use_custom_args, c_args):
 
 
 def main_loop(args):
-    proc_pool_futures = server_port_process_pool(args)
-    return proc_pool_futures
 
 
 def _load_services(args):
@@ -184,6 +175,7 @@ def server_port_thread(service, thread_num, client_info, args):
         error_mssg = 'server-port_thread(): '+str(te)
 
     # Execute hk_handler
+    matched_rule = None
     try:
         error_mssg = hk_handler.hk_handler(service, data, client_connection, args)
         if args.v:
@@ -196,7 +188,6 @@ def server_port_thread(service, thread_num, client_info, args):
 
 
 def run():
-    # Argument Processing
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--bind_ip', dest='bind_ip', help='IP address of interface to bind sockets to')
     parser.add_argument('--handler_directory', '-hd', dest='handler_dir', default='handlers/', help='path to folder containing files that define port handlers. See documentation for how to format handlers.')
@@ -204,14 +195,19 @@ def run():
     parser.add_argument('--service_schema', '-ss', dest='service_schema', default=None, help='path to a consolidated service schema (JSON or YAML)')
     parser.add_argument('--export_schema', '-es', dest='export_schema', default=None, help='write a consolidated schema (JSON) from legacy handler files then exit')
     parser.add_argument('--log_directory', '-ld', dest='log_dir', default='logs/', help='path to folder to output log files to. Each service port will have its own logfile.')
+    parser.add_argument('--log_max_bytes', dest='log_max_bytes', type=int, default=1048576, help='maximum size in bytes for a log file before rotation occurs (default 1MB).')
+    parser.add_argument('--log_backup_count', dest='log_backup_count', type=int, default=5, help='number of rotated log files to retain (default 5).')
+    parser.add_argument('--capture_limit', dest='capture_limit', type=int, default=4096, help='maximum number of bytes to capture per request for hex dumps (default 4096).')
     parser.add_argument('-v', action='store_true', default=False, help='enable verbose output')
     parser.add_argument('-tv', action='store_true', default=False, help='enable thread verbosity')
     parser.add_argument('-tc', '--thread_count', dest='thread_count', default=5, help='number of threads for each port process to manage (default 5)')
     args = parser.parse_args()
 
+    # Ensure log directory exists
+    os.makedirs(args.log_dir, exist_ok=True)
+
     # Call main loop-handler
     main_loop(args)
-    return
 
 
 def get_port_config_files(args):
@@ -219,16 +215,14 @@ def get_port_config_files(args):
         files = []
         for (_, _, filenames) in os.walk(args.handler_dir):
             files.extend(filenames)
-        if args.v:
-            print(files)
         if len(files) > 0:
             return files
         else:
-            print('No configuration files found in target directory. Exiting.')
+            print("No configuration files found in target directory. Exiting.")
             sys.exit(1)
     except Exception as e:
         print(e)
-        print('Configuration file enumeration failed. Exiting.')
+        print("Configuration file enumeration failed. Exiting.")
         sys.exit(1)
 
 

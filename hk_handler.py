@@ -2,30 +2,59 @@ from typing import Optional
 
 import service_loader
 
-
-def write_error(error_mssg, port_config, args):
-    if error_mssg is not None:
-        with open(args.log_dir + str(port_config) + '_errors.log', 'a') as logfile:
-            logfile.write(error_mssg + '\n')
+def write_error(error_mssg, port_config, args, error_logger=None):
+    if error_mssg != None:
+        log_entry = {
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'port': port_config,
+            'error': error_mssg,
+        }
+        if error_logger:
+            error_logger.error(json.dumps(log_entry))
+        else:
+            error_path = os.path.join(args.log_dir, f"{port_config}_errors.log")
+            with open(error_path, 'a') as logfile:
+                logfile.write(json.dumps(log_entry)+'\n')
     return
 
+def hk_handler(port_config, data, client_connection, args, port_settings=None, error_logger=None):
+    error_mssg = None
 
-def hk_handler(service, data, client_connection, args):
-    error_mssg: Optional[str] = None
-    matched_response = service.find_response(data)
-    if matched_response:
-        headers = matched_response.headers or service.headers
-        if service.protocol == 'http':
-            response_data = ''
-            for line in headers:
-                response_data += (line + '\n')
-            response_data += '\n'
-            response_data += matched_response.body
-            response_data += '\r\n'
-            client_connection.sendall(bytes(response_data, encoding=service.encoding), 0)
-        else:
-            response_bytes = matched_response.body.encode(service.encoding)
-            client_connection.sendall(response_bytes, 0)
+    if port_settings:
+        port_type, resp_dict, resp_headers, response_type = port_settings
+    else:
+        port_type, resp_dict, resp_headers, response_type, error_mssg = get_port_config_settings(port_config, args)
+    
+    # Check request data against responses
+    matched_rule = None
+    if len(resp_dict) > 0:
+        for pair in resp_dict:
+            pattern = pair[0] if isinstance(pair[0], (bytes, bytearray)) else bytes(pair[0], encoding='utf-8')
+            if re.match(pattern, data, re.IGNORECASE):
+                if args.v:
+
+                    print(str(pair[0]) + ' match found! Sending response.')
+
+                if response_type == 'bytes':
+                    response_data = pair[1] if isinstance(pair[1], (bytes, bytearray)) else bytes(pair[1], encoding='utf-8')
+                    client_connection.sendall(response_data, 0)
+                else:
+                    response_body = pair[1] if isinstance(pair[1], str) else pair[1].decode('utf-8')
+
+                    # Construct full response
+                    response_data = ''
+                    if len(resp_headers) > 0:
+                        for line in resp_headers:
+                            response_data += (line + '\n')
+                    response_data += '\n'
+                    response_data += response_body
+                    response_data += '\r\n'
+
+                    # Send response to client
+                    client_connection.sendall(bytes(response_data, encoding='utf-8'), 0)
+
+                client_connection.close()
+
     else:
         error_mssg = 'hk.hk_handler: No responses detected. Closing connection and returning to parent.'
     client_connection.close()
