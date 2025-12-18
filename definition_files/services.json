@@ -47,6 +47,121 @@
           "body": "SSH-2.0-OpenSSH_7.6p1 Ubuntu-4ubuntu0.3"
         }
       ]
+    },
+    {
+      "name": "ftp_21",
+      "protocol": "tcp",
+      "listener": {
+        "port": 21,
+        "bind_ip": "0.0.0.0"
+      },
+      "encoding": "utf-8",
+      "responses": [
+        {
+          "match": "^USER .*",
+          "body": "331 Please specify the password.\\r\\n"
+        },
+        {
+          "match": "^PASS .*",
+          "body": "230 Login successful.\\r\\n"
+        },
+        {
+          "match": "^(LIST|PWD|SYST)",
+          "body": "257 \"/\" is the current directory\\r\\n"
+        },
+        {
+          "match": ".*",
+          "body": "220 (vsFTPd 3.0.3)\\r\\n"
+        }
+      ]
+    },
+    {
+      "name": "telnet_23",
+      "protocol": "tcp",
+      "listener": {
+        "port": 23,
+        "bind_ip": "0.0.0.0"
+      },
+      "encoding": "utf-8",
+      "responses": [
+        {
+          "match": "^(root|admin|user)",
+          "body": "Password: "
+        },
+        {
+          "match": ".*",
+          "body": "login: "
+        }
+      ]
+    },
+    {
+      "name": "smtp_25",
+      "protocol": "tcp",
+      "listener": {
+        "port": 25,
+        "bind_ip": "0.0.0.0"
+      },
+      "encoding": "utf-8",
+      "responses": [
+        {
+          "match": "^(EHLO|HELO) .*",
+          "body": "250-honeyknot ESMTP Service Ready\\r\\n250 PIPELINING\\r\\n"
+        },
+        {
+          "match": "^(MAIL FROM:.*|RCPT TO:.*)",
+          "body": "250 2.1.5 Ok\\r\\n"
+        },
+        {
+          "match": "^DATA",
+          "body": "354 End data with <CR><LF>.<CR><LF>\\r\\n"
+        },
+        {
+          "match": "^QUIT",
+          "body": "221 2.0.0 Bye\\r\\n"
+        },
+        {
+          "match": ".*",
+          "body": "220 mail.honeyknot ESMTP Postfix\\r\\n"
+        }
+      ]
+    },
+    {
+      "name": "redis_6379",
+      "protocol": "tcp",
+      "listener": {
+        "port": 6379,
+        "bind_ip": "0.0.0.0"
+      },
+      "encoding": "utf-8",
+      "responses": [
+        {
+          "match": "PING",
+          "body": "+PONG\\r\\n"
+        },
+        {
+          "match": "^INFO",
+          "body": "# Server\\r\\nredis_version:5.0.7\\r\\n# Clients\\r\\nconnected_clients:3\\r\\n"
+        },
+        {
+          "match": ".*",
+          "body": "-ERR unknown command\\r\\n"
+        }
+      ]
+    },
+    {
+      "name": "vnc_5900",
+      "protocol": "tcp",
+      "listener": {
+        "port": 5900,
+        "bind_ip": "0.0.0.0"
+      },
+      "encoding": "utf-8",
+      "responses": [
+        {
+          "match": ".*",
+          "body": "RFB 003.008\\n"
+        }
+      ]
     }
   ]
 }
