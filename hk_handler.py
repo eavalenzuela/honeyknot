@@ -1,78 +1,162 @@
-from typing import Optional
+"""Protocol handlers for Honeyknot services.
 
-import service_loader
+The handlers here translate :class:`service_loader.ServiceDefinition` objects
+into runnable protocol implementations that can be used by
+``service_runner.ServiceRunner``. Each handler is responsible for:
 
-def write_error(error_mssg, port_config, args, error_logger=None):
-    if error_mssg != None:
-        log_entry = {
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
-            'port': port_config,
-            'error': error_mssg,
+* Reading request data from the client socket.
+* Selecting an appropriate response rule using the service definition.
+* Sending a response in the correct format for the protocol.
+* Emitting structured JSON logs with request/response metadata.
+
+The module intentionally keeps the protocol surface small to make it easy to
+extend with additional protocols or logging sinks later.
+"""
+
+from __future__ import annotations
+
+import binascii
+import json
+import logging
+from logging.handlers import RotatingFileHandler
+from typing import Optional, Tuple
+
+from service_loader import ResponseRule, ServiceDefinition
+
+
+class BaseServiceHandler:
+    """Shared helpers for all protocol handlers."""
+
+    def __init__(
+        self,
+        service: ServiceDefinition,
+        *,
+        log_dir: str,
+        capture_limit: int,
+        log_max_bytes: int,
+        log_backup_count: int,
+    ) -> None:
+        self.service = service
+        self.capture_limit = max(0, int(capture_limit))
+        self.logger = self._build_logger(
+            log_dir, service.port, log_max_bytes, log_backup_count
+        )
+
+    def _build_logger(
+        self, log_dir: str, port: int, max_bytes: int, backup_count: int
+    ) -> logging.Logger:
+        logger = logging.getLogger(f"honeyknot.port.{port}")
+        logger.setLevel(logging.INFO)
+        if not logger.handlers:
+            handler = RotatingFileHandler(
+                f"{log_dir}/{port}.log", maxBytes=max_bytes, backupCount=backup_count
+            )
+            formatter = logging.Formatter("%(message)s")
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+        return logger
+
+    def _serialize_capture(self, data: bytes) -> str:
+        limited = data[: self.capture_limit] if self.capture_limit else b""
+        return binascii.hexlify(limited).decode("ascii")
+
+    def _log_event(
+        self,
+        client_address: Tuple[str, int],
+        matched_rule: Optional[ResponseRule],
+        data: bytes,
+        *,
+        error: Optional[str] = None,
+    ) -> None:
+        entry = {
+            "client_ip": client_address[0],
+            "client_port": client_address[1],
+            "protocol": self.service.protocol,
+            "port": self.service.port,
+            "matched_rule": matched_rule.match if matched_rule else None,
+            "capture": self._serialize_capture(data),
         }
-        if error_logger:
-            error_logger.error(json.dumps(log_entry))
-        else:
-            error_path = os.path.join(args.log_dir, f"{port_config}_errors.log")
-            with open(error_path, 'a') as logfile:
-                logfile.write(json.dumps(log_entry)+'\n')
-    return
-
-def hk_handler(port_config, data, client_connection, args, port_settings=None, error_logger=None):
-    error_mssg = None
-
-    if port_settings:
-        port_type, resp_dict, resp_headers, response_type = port_settings
-    else:
-        port_type, resp_dict, resp_headers, response_type, error_mssg = get_port_config_settings(port_config, args)
-    
-    # Check request data against responses
-    matched_rule = None
-    if len(resp_dict) > 0:
-        for pair in resp_dict:
-            pattern = pair[0] if isinstance(pair[0], (bytes, bytearray)) else bytes(pair[0], encoding='utf-8')
-            if re.match(pattern, data, re.IGNORECASE):
-                if args.v:
-
-                    print(str(pair[0]) + ' match found! Sending response.')
-
-                if response_type == 'bytes':
-                    response_data = pair[1] if isinstance(pair[1], (bytes, bytearray)) else bytes(pair[1], encoding='utf-8')
-                    client_connection.sendall(response_data, 0)
-                else:
-                    response_body = pair[1] if isinstance(pair[1], str) else pair[1].decode('utf-8')
-
-                    # Construct full response
-                    response_data = ''
-                    if len(resp_headers) > 0:
-                        for line in resp_headers:
-                            response_data += (line + '\n')
-                    response_data += '\n'
-                    response_data += response_body
-                    response_data += '\r\n'
-
-                    # Send response to client
-                    client_connection.sendall(bytes(response_data, encoding='utf-8'), 0)
-
-                client_connection.close()
-
-    else:
-        error_mssg = 'hk.hk_handler: No responses detected. Closing connection and returning to parent.'
-    client_connection.close()
-    write_error(error_mssg, service.port, args)
-    return error_mssg
+        if error:
+            entry["error"] = error
+        self.logger.info(json.dumps(entry))
 
 
-def get_port_config_settings(port_config, args):
-    """Legacy shim for existing callers relying on handler files.
+class TcpServiceHandler(BaseServiceHandler):
+    """Simple TCP echo handler using regex-based responses."""
 
-    When given a port identifier, this function loads matching services from
-    the handler directory and returns a tuple similar to the old API. It is
-    deprecated in favor of using the new consolidated service schema.
-    """
+    def handle_client(self, client_socket, client_address) -> None:
+        try:
+            client_socket.settimeout(10)
+            data = client_socket.recv(4096)
+            matched_rule = self.service.find_response(data)
+            if matched_rule:
+                body = matched_rule.body
+                payload = (
+                    body
+                    if isinstance(body, (bytes, bytearray))
+                    else body.encode(self.service.encoding)
+                )
+                client_socket.sendall(payload)
+            self._log_event(client_address, matched_rule, data)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._log_event(client_address, None, b"", error=str(exc))
+            raise
+        finally:
+            try:
+                client_socket.close()
+            except OSError:
+                pass
 
-    services = service_loader.load_handler_directory(args.handler_dir, args.definition_dir)
-    for service in services:
-        if str(service.port) == str(port_config) or service.name == str(port_config):
-            resp_dict = [[resp.match, resp.body] for resp in service.responses]
-            return service.protocol, resp_dict, service.headers, None
-    return '', '', '', f'hk.get_port_config_settings: No matching service for port {port_config}'
+
+class HttpServiceHandler(BaseServiceHandler):
+    """Minimal HTTP handler that uses service response rules."""
+
+    def handle_client(self, client_socket, client_address) -> None:
+        try:
+            client_socket.settimeout(10)
+            data = client_socket.recv(4096)
+            matched_rule = self.service.find_response(data)
+            response_body = matched_rule.body if matched_rule else ""
+            if not isinstance(response_body, str):
+                response_body = response_body.decode(self.service.encoding)
+
+            headers = list(self.service.headers)
+            if headers and not any(h.lower().startswith("content-length") for h in headers):
+                headers.append(f"Content-Length: {len(response_body)}")
+            response = "\r\n".join(headers + ["", response_body])
+            client_socket.sendall(response.encode(self.service.encoding))
+            self._log_event(client_address, matched_rule, data)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._log_event(client_address, None, b"", error=str(exc))
+            raise
+        finally:
+            try:
+                client_socket.close()
+            except OSError:
+                pass
+
+
+def handler_for_service(
+    service: ServiceDefinition,
+    *,
+    log_dir: str,
+    capture_limit: int,
+    log_max_bytes: int,
+    log_backup_count: int,
+):
+    if service.protocol == "http":
+        return HttpServiceHandler(
+            service,
+            log_dir=log_dir,
+            capture_limit=capture_limit,
+            log_max_bytes=log_max_bytes,
+            log_backup_count=log_backup_count,
+        )
+    return TcpServiceHandler(
+        service,
+        log_dir=log_dir,
+        capture_limit=capture_limit,
+        log_max_bytes=log_max_bytes,
+        log_backup_count=log_backup_count,
+    )
+
