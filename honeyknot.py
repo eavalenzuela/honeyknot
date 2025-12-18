@@ -1,60 +1,11 @@
 import argparse
-import configparser
-import logging
-import os
-import sys
-from typing import Iterable, List
-
 import hk_handler
 
-from service_runner import (
-    MetricsClient,
-    NullMetrics,
-    NullThrottle,
-    ProtocolHandler,
-    ServiceRunner,
-    ServiceScheduler,
-    ThrottlePolicy,
-)
+import service_loader
 
-
-class HoneyknotProtocolHandler(ProtocolHandler):
-    """Adapters hk_handler into the ProtocolHandler interface."""
-
-    def __init__(
-        self,
-        port_config: str,
-        args: argparse.Namespace,
-        *,
-        logger: logging.Logger,
-        metrics: MetricsClient,
-    ) -> None:
-        self.port_config = port_config
-        self.args = args
-        self.logger = logger
-        self.metrics = metrics
-
-    def handle_client(self, client_socket, client_address) -> None:
-        try:
-            data = client_socket.recv(2048)
-            self._log_raw_request(client_address, data)
-            error_mssg = hk_handler.hk_handler(self.port_config, data, client_socket, self.args)
-            if error_mssg:
-                self.logger.warning("%s reported error: %s", self.port_config, error_mssg)
-                self.metrics.increment("honeyknot.handler.errors")
-        finally:
-            try:
-                client_socket.close()
-            except OSError:
-                pass
-
-    def _log_raw_request(self, client_address, data: bytes) -> None:
-        os.makedirs(self.args.log_dir, exist_ok=True)
-        logpath = os.path.join(self.args.log_dir, f"{self.port_config}.log")
-        with open(logpath, "a") as rl:
-            rl.write(f"{client_address}: {data}\n")
-        self.metrics.increment("honeyknot.requests")
-
+"""
+Honeyknot: The Highly-Configurable Honeypot
+"""
 
 def run_from_interactive_shell(ip, use_custom_args, c_args):
     if use_custom_args:
@@ -74,97 +25,75 @@ def run_from_interactive_shell(ip, use_custom_args, c_args):
         args.capture_limit = 4096
         args.v = False
         args.tv = False
+        args.service_schema = None
+        args.export_schema = None
     main_loop(args)
 
 
 def main_loop(args):
 
-    logger = configure_logger(args)
-    metrics = NullMetrics()
-    throttle = NullThrottle()
-    services = build_services(args, logger, metrics, throttle)
-    scheduler = ServiceScheduler(max_workers=int(args.thread_count), logger=logger)
-    scheduler.start(services)
-    scheduler.wait()
-    return scheduler
 
-
-def build_services(
-    args: argparse.Namespace,
-    logger: logging.Logger,
-    metrics: MetricsClient,
-    throttle: ThrottlePolicy,
-) -> List[ServiceRunner]:
-    runners: List[ServiceRunner] = []
-    for pc_file in get_port_config_files(args):
-        port = resolve_port(pc_file, args)
-        handler = HoneyknotProtocolHandler(pc_file, args, logger=logger, metrics=metrics)
-        runners.append(
-            ServiceRunner(
-                args.bind_ip,
-                port,
-                handler,
-                logger=logger,
-                metrics=metrics,
-                throttle=throttle,
-            )
-        )
-    return runners
-
-
-def resolve_port(port_config: str, args: argparse.Namespace) -> int:
-    cfg = configparser.ConfigParser()
-    cfg.read(os.path.join(args.handler_dir, str(port_config)))
-    try:
-        return int(cfg["main"]["port"])
-    except Exception as exc:
-        raise ValueError(f"Invalid port config for {port_config}") from exc
-
-    # Configure loggers
-    structured_logger = build_rotating_logger(
-        f"port_{port_config}_structured",
-        os.path.join(args.log_dir, f"{port_config}.jsonl"),
-        args.log_max_bytes,
-        args.log_backup_count,
+def _load_services(args):
+    services = service_loader.load_service_definitions(
+        args.service_schema, args.handler_dir, args.definition_dir, args.v
     )
-    error_logger = build_rotating_logger(
-        f"port_{port_config}_errors",
-        os.path.join(args.log_dir, f"{port_config}_errors.log"),
-        args.log_max_bytes,
-        args.log_backup_count,
-    )
-    capture_logger = build_rotating_logger(
-        f"port_{port_config}_captures",
-        os.path.join(args.log_dir, f"{port_config}_captures.log"),
-        args.log_max_bytes,
-        args.log_backup_count,
-    )
+    # Allow a CLI bind_ip override
+    for service in services:
+        if args.bind_ip:
+            service.bind_ip = args.bind_ip
+        elif not service.bind_ip:
+            service.bind_ip = '0.0.0.0'
+    return services
 
-    # Pre-load configuration for handler
-    port_type, resp_dict, resp_headers, config_error = hk_handler.get_port_config_settings(port_config, args)
-    if config_error:
-        hk_handler.write_error(config_error, port_config, args, error_logger)
-        return futures, config_error
 
-    port_settings = (port_type, resp_dict, resp_headers)
+def server_port_process_pool(args):
+    # Optionally perform a one-off migration from handler files to a schema
+    if args.export_schema:
+        service_loader.write_schema_from_handlers(args.handler_dir, args.definition_dir, args.export_schema)
+        print(f"Legacy handler files exported to {args.export_schema}")
+        return []
 
-    #####
-    # hk_handler module thread-internal functions testing
-    #####
-    # hk_handler() function testing
-    """
-    dummy_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    dummy_conn.bind((args.bind_ip, 9999))
-    dummy_conn.listen(1)
-    dummy_conn, addr = dummy_conn.accept()
-    dc_data = dummy_conn.recv(2048)
-    print(hk_handler.hk_handler(port_config, 'GET /huehuehue.php', dc_data, args))
-    """
-    # get_port_config_settings() function testing
-    """
-    print(hk_handler.get_port_config_settings(port_config, args))
-    """
-    #####
+    services = _load_services(args)
+    if not services:
+        print('No configuration files found in target directory or schema. Exiting.')
+        sys.exit(1)
+
+    # Create process pools
+    error_mssg = None
+    futures = []
+    with ProcessPoolExecutor(len(services)) as sppe:
+        for service in services:
+            try:
+                futures.append(sppe.submit(server_port_process, service, args))
+            except TypeError as te:
+                print(te)
+                print('TypeError encountered in server_port_process call(s)')
+            except Exception as e:
+                print(e)
+                print('Generic Exception encoutnered in server_port_process call(s)')
+        for future in as_completed(futures):
+            if args.tv:
+                port_hnd_res = future.result()
+                if future.exception():
+                    print('|--- port handler '+str(port_hnd_res)+' exited abnormally.')
+                    error_mssg = future.result()[2]
+                    if error_mssg != None:
+                        print('|--- port handler '+str(port_hnd_res)+' error_mssg:')
+                        print('|--- '+port_hnd_res[1])
+                else:
+                    print('|--- port handler closed: '+str(port_hnd_res))
+    return futures
+
+
+def server_port_process(service, args):
+    rsp, error_mssg = server_port_thread_pool(service, args)
+    hk_handler.write_error(error_mssg, service.port, args)
+    return service.port
+
+
+def server_port_thread_pool(service, args):
+    error_mssg = None
+    socket_port = service.port
 
     # Create thread pool
     with ThreadPoolExecutor(int(args.thread_count)) as spte:
@@ -173,7 +102,7 @@ def resolve_port(port_config: str, args: argparse.Namespace) -> int:
         try:
             conn_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             conn_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            conn_sock.bind((args.bind_ip, int(socket_port)))
+            conn_sock.bind((service.bind_ip, int(socket_port)))
         except Exception as se:
             print('socket construction error: ')
             print(se)
@@ -181,20 +110,8 @@ def resolve_port(port_config: str, args: argparse.Namespace) -> int:
         futures = []
         for thread_num in range(int(args.thread_count)):
             if args.tv:
-                print('|- running port handler '+str(port_config)+', thread '+str(thread_num))
-            futures.append(
-                spte.submit(
-                    server_port_thread,
-                    port_config,
-                    thread_num,
-                    None,
-                    args,
-                    port_settings,
-                    structured_logger,
-                    error_logger,
-                    capture_logger,
-                )
-            )
+                print('|- running port handler '+str(socket_port)+', thread '+str(thread_num))
+            futures.append(spte.submit(server_port_thread, service, thread_num, None, args))
         while True:
             # Move socket to listening
             while True:
@@ -216,10 +133,8 @@ def resolve_port(port_config: str, args: argparse.Namespace) -> int:
                     thread_num = future.result()[0]
                     error_mssg = future.result()[1]
                     if args.tv:
-                        print('|- spawning replacement port handler for '\
-                                'str(port_config)'\
-                                ', thread '+str(thread_num))
-                    
+                        print('|- spawning replacement port handler for '+str(socket_port)+', thread '+str(thread_num))
+
                     # Feed incoming request to idle thread
                     while True:
                         try:
@@ -228,44 +143,21 @@ def resolve_port(port_config: str, args: argparse.Namespace) -> int:
                         except Exception as e:
                             time.sleep(5)
                             continue
-                    print('connection from '+str(client_address)+' on port '+str(port_config))
+                    print('connection from '+str(client_address)+' on port '+str(socket_port))
 
                     client_info = [client_address, client_sock]
-                    futures.append(
-                        spte.submit(
-                            server_port_thread,
-                            port_config,
-                            thread_num,
-                            client_info,
-                            args,
-                            port_settings,
-                            structured_logger,
-                            error_logger,
-                            capture_logger,
-                        )
-                    )
-    hk_handler.write_error(error_mssg, port_config, args, error_logger)
+                    futures.append(spte.submit(server_port_thread, service, thread_num, client_info, args))
+    hk_handler.write_error(error_mssg, service.port, args)
     return futures, error_mssg
 
-def build_rotating_logger(name, path, max_bytes, backup_count):
-    logger = logging.getLogger(name)
-    if logger.handlers:
-        return logger
-    handler = RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backup_count, encoding='utf-8')
-    formatter = logging.Formatter('%(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    return logger
 
-def server_port_thread(port_config, thread_num, client_info, args, port_settings, structured_logger, error_logger, capture_logger):
+def server_port_thread(service, thread_num, client_info, args):
     error_mssg = None
-    print('|-- port handler: '+str(port_config)+', thread: '+str(thread_num))
-    
+    print('|-- port handler: '+str(service.port)+', thread: '+str(thread_num))
+
     # If first run, return
     if client_info == None:
-        hk_handler.write_error(error_mssg, port_config, args, error_logger)
+        hk_handler.write_error(error_mssg, service.port, args)
         return thread_num, error_mssg
     else:
         client_address = client_info[0]
@@ -274,54 +166,34 @@ def server_port_thread(port_config, thread_num, client_info, args, port_settings
         if args.v:
             print(data)
 
-    port_type, resp_dict, resp_headers = port_settings
-
-    # Log capture with size limits (hex encoded)
-    limited_data = data[: int(args.capture_limit)]
-    capture_log_entry = {
-        'timestamp': datetime.utcnow().isoformat() + 'Z',
-        'src_ip': client_address[0],
-        'src_port': client_address[1],
-        'dest_port': port_config,
-        'protocol': port_type,
-        'capture_bytes': len(limited_data),
-        'capture_truncated': len(data) > len(limited_data),
-        'hex_dump': limited_data.hex(),
-    }
-    capture_logger.info(json.dumps(capture_log_entry))
+    # Log raw request data
+    logpath = args.log_dir+str(service.port)+'.log'
+    try:
+        with open(logpath, 'a') as rl:
+            rl.write(str(client_address)+': '+str(data)+'\n')
+    except TypeError as te:
+        error_mssg = 'server-port_thread(): '+str(te)
 
     # Execute hk_handler
     matched_rule = None
     try:
-        error_mssg, matched_rule, _ = hk_handler.hk_handler(
-            port_config, data, client_connection, args, port_settings, error_logger
-        )
+        error_mssg = hk_handler.hk_handler(service, data, client_connection, args)
         if args.v:
             print(error_mssg)
     except Exception as tk:
         tk = str(tk)
         error_mssg = 'server_port_thread(): '+tk
-
-    # Structured log output
-    structured_log_entry = {
-        'timestamp': datetime.utcnow().isoformat() + 'Z',
-        'src_ip': client_address[0],
-        'src_port': client_address[1],
-        'dest_port': port_config,
-        'protocol': port_type,
-        'matched_rule': matched_rule,
-        'error': error_mssg,
-    }
-    structured_logger.info(json.dumps(structured_log_entry))
-
-    hk_handler.write_error(error_mssg, port_config, args, error_logger)
+    hk_handler.write_error(error_mssg, service.port, args)
     return thread_num, error_mssg
+
 
 def run():
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--bind_ip', dest='bind_ip', help='IP address of interface to bind sockets to')
     parser.add_argument('--handler_directory', '-hd', dest='handler_dir', default='handlers/', help='path to folder containing files that define port handlers. See documentation for how to format handlers.')
     parser.add_argument('--definitions_directory', '-dd', dest='definition_dir', default='definition_files', help='path to folder containing service definiton json files')
+    parser.add_argument('--service_schema', '-ss', dest='service_schema', default=None, help='path to a consolidated service schema (JSON or YAML)')
+    parser.add_argument('--export_schema', '-es', dest='export_schema', default=None, help='write a consolidated schema (JSON) from legacy handler files then exit')
     parser.add_argument('--log_directory', '-ld', dest='log_dir', default='logs/', help='path to folder to output log files to. Each service port will have its own logfile.')
     parser.add_argument('--log_max_bytes', dest='log_max_bytes', type=int, default=1048576, help='maximum size in bytes for a log file before rotation occurs (default 1MB).')
     parser.add_argument('--log_backup_count', dest='log_backup_count', type=int, default=5, help='number of rotated log files to retain (default 5).')
@@ -338,7 +210,7 @@ def run():
     main_loop(args)
 
 
-def get_port_config_files(args) -> Iterable[str]:
+def get_port_config_files(args):
     try:
         files = []
         for (_, _, filenames) in os.walk(args.handler_dir):
