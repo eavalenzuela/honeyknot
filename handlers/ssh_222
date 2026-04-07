@@ -1,4 +1,0 @@
-[main]
-port = 222    
-service_type = tcp
-definition_file = ssh.json

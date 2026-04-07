@@ -1,75 +1,64 @@
 # honeyknot
 
-A multi-port HTTP/TCP honeypot for farming malware and probing common attack
-patterns. Services can be defined either with legacy handler files or a single
-consolidated schema.
+A highly-configurable multi-port honeypot for farming malware.
 
-## Project layout
+Honeyknot listens on configurable ports, responds to incoming connections with crafted responses (HTTP, HTTPS, or raw TCP), and logs all incoming request data. Captured payloads are automatically analyzed for known file types.
 
-* `honeyknot.py` – CLI entrypoint that loads services, spawns worker processes,
-  and hands them to the scheduler.
-* `hk_handler.py` – Protocol-aware service handlers that emit structured JSON
-  logs and serve responses defined in the schema.
-* `service_loader.py` – Service definition models plus helpers to parse legacy
-  handler files or consolidated JSON/YAML schemas.
-* `service_runner.py` – Thin socket lifecycle management and scheduling helpers
-  for running services in threads.
-* `definition_files/` – Example schema files (`services.json`) and legacy TCP
-  definition data (`ssh.json`).
-* `handlers/` – Legacy INI-style handler definitions that can be migrated into a
-  consolidated schema.
-* `logs/` – Default location for per-port rotating logs.
+Requires Python 3.11+. No external dependencies (stdlib only).
 
-## Service schema
+## Usage
 
-Services can be defined in a single JSON or YAML schema file (default:
-`definition_files/services.json`). Each entry describes the protocol (`http` or
-`tcp`), listener settings, headers, and regex-based response rules. Provide a
-different schema at runtime with `--service_schema <path>`.
+```bash
+# Run from CLI
+python -m honeyknot -i <bind_ip>
 
-To migrate legacy `handlers/` INI files into the consolidated format, run:
+# With options
+python -m honeyknot -i 0.0.0.0 -v -tc 10 -hd handlers/ -ld logs/
 
-```
-python service_loader.py --from-handlers handlers --definition-dir definition_files --output definition_files/services.migrated.json
+# Or via the installed script (after pip install)
+honeyknot -i 0.0.0.0
+
+# From a Python interactive shell
+from honeyknot import run_from_interactive_shell
+run_from_interactive_shell("0.0.0.0")
 ```
 
-You can also export during startup with `--export_schema <path>`, which writes
-the schema and exits without starting services.
+**Flags:**
+- `-i` / `--bind-ip` — IP to bind sockets to (required)
+- `-hd` / `--handler-dir` — directory containing TOML handler definitions (default: `handlers/`)
+- `-ld` / `--log-dir` — directory for log output (default: `logs/`)
+- `-tc` / `--thread-count` — threads per port process (default: 5)
+- `-v` / `--verbose` — enable debug-level logging
 
-## Logging and capture
+## Handler Definitions
 
-Honeyknot emits structured JSON line logs per port that include client IP/port,
-protocol, matched rule, and hex-encoded request captures. Log rotation and
-retention are configurable. The capture payload is truncated according to the
-configured limit to keep log sizes manageable.
+Each port is configured by a TOML file in the handlers directory. Example for an HTTP honeypot:
 
-### Useful flags
+```toml
+[service]
+port = 80
+type = "http"  # "http", "https", or "tcp"
 
-* `--log_directory`: destination folder for log files (default `logs/`).
-* `--log_max_bytes`: maximum size in bytes before rotating a log file (default
-  1MB).
-* `--log_backup_count`: number of rotated log files to retain (default 5).
-* `--capture_limit`: maximum number of bytes per request to include in hex dump
-  captures (default 4096).
-* `--processes`: optional override for the number of worker processes (defaults
-  to the number of services loaded).
+[response_headers]
+status_line = "HTTP/1.1 200 OK"
+headers = ["Server: Apache/2.4.41", "Content-Type: text/html", "Connection: close"]
 
-## Running
+[default_response]
+body = "<html><body><h1>404 Not Found</h1></body></html>"
 
-Start the honeypot with the default schema:
+[[rules]]
+name = "php_request"
+pattern = '^GET /.*\.php'
+response = '<?php system($_REQUEST["cmd"]); ?>'
 
+[[rules]]
+name = "root_get"
+pattern = '^GET / '
+response = "<html><body><h2>success</h2></body></html>"
 ```
-python honeyknot.py
-```
 
-Override the bind IP and log directory:
-
-```
-python honeyknot.py --bind-ip 0.0.0.0 --log_directory /var/log/honeyknot
-```
-
-Run with a custom service schema:
-
-```
-python honeyknot.py --service_schema path/to/schema.yaml
-```
+- **`[service]`** — port number, protocol type, optional encoding
+- **`[response_headers]`** — HTTP status line and headers (omit for TCP services)
+- **`[default_response]`** — fallback when no rule matches
+- **`[[rules]]`** — ordered list of regex pattern / response pairs (first match wins)
+- Patterns are Python regex, matched case-insensitively against decoded request data

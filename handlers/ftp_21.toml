@@ -1,0 +1,24 @@
+# FTP honeypot on port 21
+
+[service]
+port = 21
+type = "tcp"
+description = "FTP honeypot presenting as vsFTPd 3.0.3"
+
+[default_response]
+body = "220 (vsFTPd 3.0.3)\r\n"
+
+[[rules]]
+name = "user_command"
+pattern = '^USER .*'
+response = "331 Please specify the password.\r\n"
+
+[[rules]]
+name = "pass_command"
+pattern = '^PASS .*'
+response = "230 Login successful.\r\n"
+
+[[rules]]
+name = "list_pwd_syst"
+pattern = '^(LIST|PWD|SYST)'
+response = "257 \"/\" is the current directory\r\n"

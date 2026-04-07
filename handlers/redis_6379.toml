@@ -1,0 +1,19 @@
+# Redis honeypot on port 6379
+
+[service]
+port = 6379
+type = "tcp"
+description = "Redis honeypot presenting as Redis 5.0.7"
+
+[default_response]
+body = "-ERR unknown command\r\n"
+
+[[rules]]
+name = "ping"
+pattern = 'PING'
+response = "+PONG\r\n"
+
+[[rules]]
+name = "info"
+pattern = '^INFO'
+response = "# Server\r\nredis_version:5.0.7\r\n# Clients\r\nconnected_clients:3\r\n"

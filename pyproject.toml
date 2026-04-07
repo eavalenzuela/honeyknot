@@ -1,0 +1,8 @@
+[project]
+name = "honeyknot"
+version = "0.3.0"
+description = "A highly-configurable multi-port honeypot for farming malware"
+requires-python = ">=3.11"
+
+[project.scripts]
+honeyknot = "honeyknot.cli:main"

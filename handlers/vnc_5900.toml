@@ -1,0 +1,9 @@
+# VNC honeypot on port 5900
+
+[service]
+port = 5900
+type = "tcp"
+description = "VNC honeypot presenting RFB 003.008"
+
+[default_response]
+body = "RFB 003.008\n"

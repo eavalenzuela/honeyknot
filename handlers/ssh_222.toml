@@ -1,0 +1,14 @@
+# SSH honeypot on port 222
+
+[service]
+port = 222
+type = "tcp"
+description = "SSH honeypot presenting as OpenSSH 7.6p1 Ubuntu"
+
+[default_response]
+body = ""
+
+[[rules]]
+name = "openssh_banner"
+pattern = 'SSH-2\.0-OpenSSH.*'
+response = "SSH-2.0-OpenSSH_7.6p1 Ubuntu-4ubuntu0.3"
