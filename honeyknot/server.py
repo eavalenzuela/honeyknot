@@ -5,7 +5,7 @@ import multiprocessing
 import signal
 import socket
 import ssl
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 from honeyknot.analyzer import analyze_payload
 from honeyknot.config import ServiceConfig, load_all_handlers
@@ -150,22 +150,22 @@ class HoneyknotDaemon:
         configs = load_all_handlers(self.handler_dir)
         logger.info("Loaded %d handler config(s)", len(configs))
 
-        with ProcessPoolExecutor(max_workers=len(configs)) as pool:
-            futures = {
-                pool.submit(
-                    _run_port_server,
-                    cfg, self.bind_ip, self.log_dir,
-                    self.thread_count, self.shutdown_event,
-                ): cfg
-                for cfg in configs
-            }
+        processes = []
+        for cfg in configs:
+            proc = multiprocessing.Process(
+                target=_run_port_server,
+                args=(cfg, self.bind_ip, self.log_dir,
+                      self.thread_count, self.shutdown_event),
+                name=f"port-{cfg.port}",
+            )
+            proc.start()
+            processes.append((proc, cfg))
 
-            for future in as_completed(futures):
-                cfg = futures[future]
-                try:
-                    future.result()
-                except Exception:
-                    logger.exception("Port %d process crashed", cfg.port)
+        for proc, cfg in processes:
+            proc.join()
+            if proc.exitcode:
+                logger.error("Port %d process crashed (exit code %d)",
+                             cfg.port, proc.exitcode)
 
         logger.info("Honeyknot shut down")
 
