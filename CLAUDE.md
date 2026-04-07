@@ -22,7 +22,23 @@ run_from_interactive_shell("0.0.0.0")
 
 Key CLI flags: `-v` verbose/debug logging, `-tc` thread count per port (default 5).
 
-There is no build step, test suite, or linter configured.
+## Development
+
+```bash
+# Create venv and install tools
+python3 -m venv .venv && source .venv/bin/activate
+pip install ruff pytest
+
+# Lint
+ruff check honeyknot/ tests/
+
+# Run all tests
+pytest
+
+# Run a single test file or test
+pytest tests/test_handler.py
+pytest tests/test_config.py::TestLoadHandler::test_invalid_regex_caught_at_load
+```
 
 ## Architecture
 

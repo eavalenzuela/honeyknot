@@ -75,7 +75,7 @@ def load_handler(path: Path) -> ServiceConfig:
             compiled = re.compile(rule_data["pattern"], re.IGNORECASE)
         except re.error as e:
             raise ValueError(f"{path}: invalid regex in rule {i} "
-                             f"({rule_data.get('name', '?')}): {e}")
+                             f"({rule_data.get('name', '?')}): {e}") from e
         rules.append(Rule(
             name=rule_data.get("name", f"rule_{i}"),
             pattern=compiled,

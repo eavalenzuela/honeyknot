@@ -61,7 +61,7 @@ class PortServer:
             while not self.shutdown_event.is_set():
                 try:
                     conn, addr = server_sock.accept()
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 except OSError:
                     break
