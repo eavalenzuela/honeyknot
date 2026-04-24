@@ -31,6 +31,15 @@ def main():
         "-v", "--verbose", action="store_true", default=False,
         help="enable debug-level logging",
     )
+    parser.add_argument(
+        "--event-log-max-bytes", dest="event_log_max_bytes", type=int,
+        default=None,
+        help="rotate events.jsonl after this many bytes (default: 100MB)",
+    )
+    parser.add_argument(
+        "--event-log-backups", dest="event_log_backups", type=int, default=None,
+        help="number of rotated events.jsonl backups to keep (default: 10)",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_dir, verbose=args.verbose)
@@ -40,6 +49,8 @@ def main():
         handler_dir=args.handler_dir,
         log_dir=args.log_dir,
         thread_count=args.thread_count,
+        event_log_max_bytes=args.event_log_max_bytes,
+        event_log_backups=args.event_log_backups,
     )
     daemon.start()
 

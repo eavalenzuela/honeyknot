@@ -40,7 +40,7 @@ class ServiceConfig:
 
 VALID_SERVICE_TYPES = {"http", "https", "tcp"}
 VALID_PROTOCOLS = {
-    "regex", "ssh", "smtp", "ftp", "telnet", "redis",
+    "regex", "ssh", "smtp", "ftp", "telnet", "redis", "vnc", "http",
     "dns", "snmp", "ssdp", "netbios_ns", "chargen", "memcached",
     "smb", "mssql", "rdp",
 }

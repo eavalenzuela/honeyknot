@@ -42,6 +42,31 @@ class TestEventSink:
         assert "peer" not in rec
         assert rec["name"] == "startup"
 
+    def test_rotates_at_max_bytes(self, tmp_path):
+        sink = EventSink(tmp_path, max_bytes=200, backup_count=3)
+        # Each event line is ~130 bytes; two writes should force rotation.
+        for i in range(5):
+            sink.emit("connect", transport="tcp", port=1, protocol="x",
+                      peer=("1.2.3.4", i + 1))
+        sink.close()
+        base = tmp_path / "events.jsonl"
+        assert base.exists()
+        assert (tmp_path / "events.jsonl.1").exists()
+        # The oldest rotated backup should be within the backup_count limit
+        beyond = tmp_path / "events.jsonl.4"
+        assert not beyond.exists()
+
+    def test_backup_count_respected(self, tmp_path):
+        sink = EventSink(tmp_path, max_bytes=100, backup_count=2)
+        for i in range(10):
+            sink.emit("connect", transport="tcp", port=1, protocol="x",
+                      peer=("1.2.3.4", i))
+        sink.close()
+        assert (tmp_path / "events.jsonl").exists()
+        assert (tmp_path / "events.jsonl.1").exists()
+        assert (tmp_path / "events.jsonl.2").exists()
+        assert not (tmp_path / "events.jsonl.3").exists()
+
     def test_unserializable_dropped_cleanly(self, tmp_path):
         sink = EventSink(tmp_path)
 

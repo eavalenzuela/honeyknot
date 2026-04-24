@@ -3,6 +3,7 @@
 [service]
 port = 80
 type = "http"
+protocol = "http"
 
 [response_headers]
 status_line = "HTTP/1.1 200 OK"

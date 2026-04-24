@@ -15,6 +15,7 @@ from honeyknot.protocols.base import (
 from honeyknot.protocols.chargen import ChargenHandler
 from honeyknot.protocols.dns import DNSHandler
 from honeyknot.protocols.ftp import FTPHandler
+from honeyknot.protocols.http import HTTPHandler
 from honeyknot.protocols.memcached import MemcachedHandler
 from honeyknot.protocols.mssql import MSSQLHandler
 from honeyknot.protocols.netbios_ns import NetBIOSNSHandler
@@ -27,6 +28,7 @@ from honeyknot.protocols.snmp import SNMPHandler
 from honeyknot.protocols.ssdp import SSDPHandler
 from honeyknot.protocols.ssh import SSHHandler
 from honeyknot.protocols.telnet import TelnetHandler
+from honeyknot.protocols.vnc import VNCHandler
 
 __all__ = [
     "ChargenHandler",
@@ -34,6 +36,7 @@ __all__ = [
     "DNSHandler",
     "DatagramContext",
     "FTPHandler",
+    "HTTPHandler",
     "MSSQLHandler",
     "MemcachedHandler",
     "NetBIOSNSHandler",
@@ -47,6 +50,7 @@ __all__ = [
     "SSDPHandler",
     "SSHHandler",
     "TelnetHandler",
+    "VNCHandler",
     "get_handler",
 ]
 
@@ -57,6 +61,8 @@ _REGISTRY: dict[str, type[ProtocolHandler]] = {
     "ftp": FTPHandler,
     "telnet": TelnetHandler,
     "redis": RedisHandler,
+    "vnc": VNCHandler,
+    "http": HTTPHandler,
     "dns": DNSHandler,
     "snmp": SNMPHandler,
     "ssdp": SSDPHandler,

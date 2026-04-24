@@ -3,7 +3,5 @@
 [service]
 port = 5900
 type = "tcp"
-description = "VNC honeypot presenting RFB 003.008"
-
-[default_response]
-body = "RFB 003.008\n"
+protocol = "vnc"
+description = "VNC honeypot walking attackers through RFB 3.8 auth (always fails)"

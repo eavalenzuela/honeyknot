@@ -308,13 +308,17 @@ class HoneyknotDaemon:
 
     def __init__(self, bind_ip: str, handler_dir: str = "handlers/",
                  log_dir: str = "logs/", thread_count: int = 5,
-                 max_capture_bytes: int = DEFAULT_MAX_CAPTURE_BYTES):
+                 max_capture_bytes: int = DEFAULT_MAX_CAPTURE_BYTES,
+                 event_log_max_bytes: int | None = None,
+                 event_log_backups: int | None = None):
         self.bind_ip = bind_ip
         self.handler_dir = handler_dir
         self.log_dir = log_dir
         # thread_count is accepted for CLI compatibility; asyncio doesn't use it.
         self.thread_count = thread_count
         self.max_capture_bytes = max_capture_bytes
+        self.event_log_max_bytes = event_log_max_bytes
+        self.event_log_backups = event_log_backups
 
     def start(self) -> None:
         asyncio.run(self._run())
@@ -323,7 +327,12 @@ class HoneyknotDaemon:
         configs = load_all_handlers(self.handler_dir)
         logger.info("Loaded %d handler config(s)", len(configs))
 
-        events = EventSink(self.log_dir)
+        event_kwargs = {}
+        if self.event_log_max_bytes is not None:
+            event_kwargs["max_bytes"] = self.event_log_max_bytes
+        if self.event_log_backups is not None:
+            event_kwargs["backup_count"] = self.event_log_backups
+        events = EventSink(self.log_dir, **event_kwargs)
 
         servers: list = []
         for cfg in configs:
