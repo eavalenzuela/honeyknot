@@ -50,6 +50,10 @@ class FTPHandler(ProtocolHandler):
         elif cmd == "PASS":
             logger.info("FTP creds from %s: user=%r pass=%r",
                         ctx.addr, ctx.state.get("user"), arg)
+            ctx.event("credentials",
+                      service="ftp",
+                      username=ctx.state.get("user"),
+                      password=arg)
             await ctx.send(b"230 Login successful.\r\n")
         elif cmd == "SYST":
             await ctx.send(b"215 UNIX Type: L8\r\n")
@@ -66,6 +70,7 @@ class FTPHandler(ProtocolHandler):
             await ctx.send(b"425 Cannot open data connection.\r\n")
         elif cmd in ("LIST", "NLST", "STOR", "APPE", "RETR", "DELE"):
             logger.info("FTP %s from %s: %s", cmd, ctx.addr, arg)
+            ctx.event("command", service="ftp", command=cmd, arg=arg)
             await ctx.send(b"425 Use PORT or PASV first.\r\n")
         elif cmd == "QUIT":
             await ctx.send(b"221 Goodbye.\r\n")

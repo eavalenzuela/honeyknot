@@ -6,6 +6,7 @@ from honeyknot.analyzer import (
     analyze_pdf,
     analyze_pe,
     identify_file_type,
+    scan_payload,
 )
 
 
@@ -129,3 +130,26 @@ class TestAnalyzePayload:
         result = analyze_payload(b"\x1f\x8b\x08\x00" + b"\x00" * 60)
         assert result is not None
         assert result["type"] == "GZIP"
+
+
+class TestScanPayload:
+    def test_finds_elf_after_http_headers(self):
+        headers = b"POST /x HTTP/1.1\r\nHost: a\r\nContent-Length: 60\r\n\r\n"
+        elf = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 8 + b"\x02\x00" + b"\x00" * 44
+        result = scan_payload(headers + elf)
+        assert result is not None
+        assert result["type"] == "ELF"
+        assert result["class"] == "ELF64"
+        assert result["offset"] == len(headers)
+
+    def test_finds_pe_embedded_in_frame(self):
+        result = scan_payload(b"\x00\x00" * 10 + b"MZ" + b"\x00" * 62)
+        assert result is not None
+        assert result["type"] == "PE/EXE"
+        assert result["offset"] == 20
+
+    def test_no_hit_returns_none(self):
+        assert scan_payload(b"just random text data here") is None
+
+    def test_short_input_none(self):
+        assert scan_payload(b"hi") is None

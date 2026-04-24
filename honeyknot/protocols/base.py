@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,12 +16,17 @@ class ConnectionContext:
     The handler owns `state` (a free-form dict) for whatever session tracking
     it needs. `closed` is a flag the handler sets to request the server drop
     the connection after the current callback returns.
+
+    `emit_event` is an optional callback that forwards a protocol-level event
+    (name + kwargs) to the JSONL sink. Handlers should use it to record
+    high-signal observations like captured creds or issued commands.
     """
     writer: asyncio.StreamWriter
     addr: tuple
     port: int
     request_logger: logging.Logger
     raw_capture: Any  # file-like, may be None if capture disabled
+    emit_event: Callable[..., None] | None = None
     state: dict = field(default_factory=dict)
     closed: bool = False
 
@@ -35,6 +41,11 @@ class ConnectionContext:
         """Mark this connection for shutdown after the current callback."""
         self.closed = True
 
+    def event(self, name: str, **fields: Any) -> None:
+        """Emit a protocol-level event. No-op if no sink is wired."""
+        if self.emit_event is not None:
+            self.emit_event(name, **fields)
+
 
 @dataclass
 class DatagramContext:
@@ -48,10 +59,15 @@ class DatagramContext:
     addr: tuple
     port: int
     request_logger: logging.Logger
+    emit_event: Callable[..., None] | None = None
 
     def send(self, data: bytes) -> None:
         """Emit a response datagram back to the peer."""
         self.transport.sendto(data, self.addr)
+
+    def event(self, name: str, **fields: Any) -> None:
+        if self.emit_event is not None:
+            self.emit_event(name, **fields)
 
 
 class ProtocolHandler:

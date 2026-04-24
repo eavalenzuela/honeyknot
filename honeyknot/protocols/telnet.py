@@ -80,10 +80,13 @@ class TelnetHandler(ProtocolHandler):
         elif phase == "pass":
             logger.info("Telnet creds from %s: user=%r pass=%r",
                         ctx.addr, ctx.state.get("user"), text)
+            ctx.event("credentials", service="telnet",
+                      username=ctx.state.get("user"), password=text)
             ctx.state["phase"] = "shell"
             await ctx.send(b"\r\n# ")
         else:
             logger.info("Telnet cmd from %s: %r", ctx.addr, text)
+            ctx.event("shell_command", service="telnet", command=text)
             if text.lower() in ("exit", "quit", "logout"):
                 ctx.close()
                 return

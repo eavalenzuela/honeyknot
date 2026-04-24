@@ -7,7 +7,9 @@ import ssl
 from datetime import UTC, datetime
 from pathlib import Path
 
+from honeyknot.analyzer import scan_payload
 from honeyknot.config import ServiceConfig, load_all_handlers
+from honeyknot.events import EventSink
 from honeyknot.logger import get_port_logger
 from honeyknot.protocols import (
     ConnectionContext,
@@ -27,11 +29,13 @@ class PortServer:
     """One TCP listener for a single port, with a per-port protocol handler."""
 
     def __init__(self, config: ServiceConfig, bind_ip: str, log_dir: str,
-                 max_capture_bytes: int = DEFAULT_MAX_CAPTURE_BYTES):
+                 max_capture_bytes: int = DEFAULT_MAX_CAPTURE_BYTES,
+                 events: EventSink | None = None):
         self.config = config
         self.bind_ip = bind_ip
         self.log_dir = Path(log_dir)
         self.max_capture_bytes = max_capture_bytes
+        self.events = events
         self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
         self.request_logger = get_port_logger(config.port, log_dir)
         self.handler: ProtocolHandler = get_handler(config)
@@ -90,14 +94,31 @@ class PortServer:
         peer = writer.get_extra_info("peername") or ("?", 0)
         self.logger.info("Connection from %s on port %d", peer, self.config.port)
 
-        capture_file = self._open_capture(peer)
+        capture_path, capture_file = self._open_capture(peer)
+        captured = bytearray()
+
+        def _emit_protocol(name: str, **fields) -> None:
+            if self.events is not None:
+                self.events.emit(
+                    "protocol",
+                    transport="tcp",
+                    port=self.config.port,
+                    protocol=self.config.protocol,
+                    peer=peer,
+                    name=name,
+                    **fields,
+                )
+
         ctx = ConnectionContext(
             writer=writer,
             addr=peer,
             port=self.config.port,
             request_logger=self.request_logger,
             raw_capture=capture_file,
+            emit_event=_emit_protocol,
         )
+
+        self._emit("connect", peer, capture=str(capture_path) if capture_path else None)
 
         total = 0
         try:
@@ -112,8 +133,10 @@ class PortServer:
                     break
 
                 remaining = self.max_capture_bytes - total
-                if remaining > 0 and capture_file is not None:
-                    capture_file.write(data[:remaining])
+                if remaining > 0:
+                    if capture_file is not None:
+                        capture_file.write(data[:remaining])
+                    captured.extend(data[:remaining])
                 total += len(data)
 
                 await self.handler.on_data(data, ctx)
@@ -133,6 +156,8 @@ class PortServer:
                 await writer.wait_closed()
             except Exception:
                 pass
+            self._run_analyzer(bytes(captured), peer)
+            self._emit("close", peer, bytes_in=total)
 
     def _open_capture(self, peer: tuple):
         ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -140,65 +165,79 @@ class PortServer:
         safe_host = host.replace(":", "_").replace("/", "_")
         path = self._raw_dir / f"{ts}_{safe_host}_{self.config.port}.bin"
         try:
-            return open(path, "wb")
+            return path, open(path, "wb")
         except OSError as e:
             self.logger.error("Cannot open raw capture %s: %s", path, e)
-            return None
+            return None, None
+
+    def _emit(self, event: str, peer: tuple, **extra) -> None:
+        if self.events is not None:
+            self.events.emit(
+                event, transport="tcp", port=self.config.port,
+                protocol=self.config.protocol, peer=peer, **extra,
+            )
+
+    def _run_analyzer(self, data: bytes, peer: tuple) -> None:
+        if len(data) < 4:
+            return
+        result = scan_payload(data)
+        if not result:
+            return
+        self.logger.info("Analyzer hit from %s: %s", peer, result)
+        if self.events is not None:
+            self.events.emit(
+                "analyzer_hit", transport="tcp", port=self.config.port,
+                protocol=self.config.protocol, peer=peer, result=result,
+            )
 
 
 class _UdpProtocol(asyncio.DatagramProtocol):
     """asyncio DatagramProtocol that bridges datagrams into a ProtocolHandler."""
 
-    def __init__(self, config: ServiceConfig, handler: ProtocolHandler,
-                 request_logger: logging.Logger, raw_dir: Path,
-                 logger_: logging.Logger):
-        self.config = config
-        self.handler = handler
-        self.request_logger = request_logger
-        self.raw_dir = raw_dir
-        self.logger = logger_
+    def __init__(self, owner: "UdpPortServer"):
+        self.owner = owner
         self.transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport):
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr: tuple) -> None:
-        self.logger.info("Datagram from %s on port %d (%d bytes)",
-                         addr, self.config.port, len(data))
-        self._dump_raw(data, addr)
+        self.owner.logger.info("Datagram from %s on port %d (%d bytes)",
+                               addr, self.owner.config.port, len(data))
+        capture_path = self.owner._dump_raw(data, addr)
+
+        def _emit_protocol(name: str, **fields) -> None:
+            self.owner._emit("protocol", addr, name=name, **fields)
+
         ctx = DatagramContext(
             transport=self.transport,
             addr=addr,
-            port=self.config.port,
-            request_logger=self.request_logger,
+            port=self.owner.config.port,
+            request_logger=self.owner.request_logger,
+            emit_event=_emit_protocol,
         )
+        self.owner._emit("datagram", addr,
+                         bytes=len(data),
+                         capture=str(capture_path) if capture_path else None)
+        self.owner._analyze_udp(data, addr)
         asyncio.ensure_future(self._dispatch(data, ctx))
 
     async def _dispatch(self, data: bytes, ctx: DatagramContext) -> None:
         try:
-            await self.handler.on_datagram(data, ctx)
+            await self.owner.handler.on_datagram(data, ctx)
         except Exception:
-            self.logger.exception("Error handling datagram from %s", ctx.addr)
-
-    def _dump_raw(self, data: bytes, addr: tuple) -> None:
-        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-        host = addr[0] if addr else "unknown"
-        safe_host = host.replace(":", "_").replace("/", "_")
-        path = self.raw_dir / f"{ts}_{safe_host}_{self.config.port}_udp.bin"
-        try:
-            with open(path, "wb") as f:
-                f.write(data)
-        except OSError as e:
-            self.logger.error("Cannot write UDP capture %s: %s", path, e)
+            self.owner.logger.exception("Error handling datagram from %s", ctx.addr)
 
 
 class UdpPortServer:
     """One UDP listener for a single port, sharing the ProtocolHandler contract."""
 
-    def __init__(self, config: ServiceConfig, bind_ip: str, log_dir: str):
+    def __init__(self, config: ServiceConfig, bind_ip: str, log_dir: str,
+                 events: EventSink | None = None):
         self.config = config
         self.bind_ip = bind_ip
         self.log_dir = Path(log_dir)
+        self.events = events
         self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
         self.request_logger = get_port_logger(config.port, log_dir)
         self.handler: ProtocolHandler = get_handler(config)
@@ -210,10 +249,7 @@ class UdpPortServer:
         loop = asyncio.get_running_loop()
         try:
             self._transport, _ = await loop.create_datagram_endpoint(
-                lambda: _UdpProtocol(
-                    self.config, self.handler, self.request_logger,
-                    self._raw_dir, self.logger,
-                ),
+                lambda: _UdpProtocol(self),
                 local_addr=(self.bind_ip, self.config.port),
             )
         except OSError as e:
@@ -224,8 +260,6 @@ class UdpPortServer:
                          self.bind_ip, self.config.port, self.config.protocol)
 
     async def serve(self) -> None:
-        # Datagram endpoints run on the loop; nothing to await here.
-        # Block forever so gather keeps this task alive until cancelled.
         while self._transport is not None and not self._transport.is_closing():
             await asyncio.sleep(3600)
 
@@ -234,6 +268,39 @@ class UdpPortServer:
             return
         self._transport.close()
         self.logger.info("UDP port %d shut down", self.config.port)
+
+    def _dump_raw(self, data: bytes, addr: tuple):
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        host = addr[0] if addr else "unknown"
+        safe_host = host.replace(":", "_").replace("/", "_")
+        path = self._raw_dir / f"{ts}_{safe_host}_{self.config.port}_udp.bin"
+        try:
+            with open(path, "wb") as f:
+                f.write(data)
+            return path
+        except OSError as e:
+            self.logger.error("Cannot write UDP capture %s: %s", path, e)
+            return None
+
+    def _emit(self, event: str, peer: tuple, **extra) -> None:
+        if self.events is not None:
+            self.events.emit(
+                event, transport="udp", port=self.config.port,
+                protocol=self.config.protocol, peer=peer, **extra,
+            )
+
+    def _analyze_udp(self, data: bytes, peer: tuple) -> None:
+        if len(data) < 4:
+            return
+        result = scan_payload(data)
+        if not result:
+            return
+        self.logger.info("Analyzer hit from %s: %s", peer, result)
+        if self.events is not None:
+            self.events.emit(
+                "analyzer_hit", transport="udp", port=self.config.port,
+                protocol=self.config.protocol, peer=peer, result=result,
+            )
 
 
 class HoneyknotDaemon:
@@ -256,13 +323,18 @@ class HoneyknotDaemon:
         configs = load_all_handlers(self.handler_dir)
         logger.info("Loaded %d handler config(s)", len(configs))
 
+        events = EventSink(self.log_dir)
+
         servers: list = []
         for cfg in configs:
             if cfg.transport == "udp":
-                servers.append(UdpPortServer(cfg, self.bind_ip, self.log_dir))
+                servers.append(UdpPortServer(
+                    cfg, self.bind_ip, self.log_dir, events,
+                ))
             else:
                 servers.append(PortServer(
-                    cfg, self.bind_ip, self.log_dir, self.max_capture_bytes,
+                    cfg, self.bind_ip, self.log_dir,
+                    self.max_capture_bytes, events,
                 ))
 
         await asyncio.gather(*(s.start() for s in servers))
@@ -289,4 +361,5 @@ class HoneyknotDaemon:
         await asyncio.gather(*(s.stop() for s in servers), return_exceptions=True)
         await asyncio.gather(*serve_tasks, return_exceptions=True)
 
+        events.close()
         logger.info("Honeyknot shut down")

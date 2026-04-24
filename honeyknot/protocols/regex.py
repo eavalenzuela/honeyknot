@@ -2,12 +2,12 @@
 
 This is the back-compat handler. Every existing TOML runs under this: the
 client speaks first, we match one regex against the first chunk, send one
-response, run the analyzer on HTTP POST/PUT bodies, then close.
+response, then close. Payload analysis is handled by the server at
+connection-close time against the full raw capture (see PortServer).
 """
 
 import logging
 
-from honeyknot.analyzer import analyze_payload
 from honeyknot.handler import match_request
 from honeyknot.protocols.base import ConnectionContext, ProtocolHandler
 
@@ -26,26 +26,4 @@ class RegexHandler(ProtocolHandler):
         if response:
             await ctx.send(response)
 
-        self._try_analyze(data, ctx)
         ctx.close()
-
-    def _try_analyze(self, data: bytes, ctx: ConnectionContext) -> None:
-        try:
-            decoded = data.decode("utf-8", errors="replace")
-        except Exception:
-            return
-
-        if not (decoded.startswith("POST ") or decoded.startswith("PUT ")):
-            return
-
-        separator = b"\r\n\r\n"
-        idx = data.find(separator)
-        if idx == -1:
-            return
-        body = data[idx + len(separator):]
-        if len(body) < 4:
-            return
-
-        result = analyze_payload(body)
-        if result:
-            logger.info("File analysis from %s: %s", ctx.addr, result)

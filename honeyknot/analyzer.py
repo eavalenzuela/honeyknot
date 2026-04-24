@@ -94,8 +94,10 @@ def analyze_pdf(header: bytes) -> dict:
 def analyze_payload(data: bytes) -> dict | None:
     """Analyze a payload and return file type info, or None if unrecognized.
 
-    This is the main entry point used by the handler to analyze
-    captured request bodies.
+    Prefix-match only — used when the caller has already isolated a body.
+    For streaming analysis over a full captured byte stream (including
+    protocol framing like HTTP headers, SMB framing, etc.), use
+    `scan_payload` instead.
     """
     if len(data) < 4:
         return None
@@ -115,3 +117,26 @@ def analyze_payload(data: bytes) -> dict | None:
     else:
         # For other recognized types, return the basic identification
         return {"type": file_type}
+
+
+def scan_payload(data: bytes) -> dict | None:
+    """Search for any known magic signature anywhere in `data`.
+
+    Returns the first hit as a dict with `offset` + the usual analyzer fields,
+    or None if nothing recognized. This is what the server runs at connection
+    close over the full raw-captured byte stream, since payloads often arrive
+    wrapped in protocol framing (HTTP headers, chunked bodies, SMB frames,
+    etc.) rather than at byte 0.
+    """
+    if len(data) < 4:
+        return None
+    for magic, _ in SIGNATURES:
+        idx = data.find(magic)
+        if idx == -1:
+            continue
+        result = analyze_payload(data[idx:])
+        if result is not None:
+            result = dict(result)
+            result["offset"] = idx
+            return result
+    return None
