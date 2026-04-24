@@ -64,7 +64,7 @@ class PortServer:
 
     async def start(self) -> None:
         ssl_ctx = self._build_ssl_context()
-        if self.config.service_type == "https" and ssl_ctx is None:
+        if self.config.tls_enabled and ssl_ctx is None:
             return
 
         try:
@@ -80,9 +80,10 @@ class PortServer:
             self.logger.error("Failed to bind port %d: %s", self.config.port, e)
             return
 
-        self.logger.info("Listening on %s:%d (%s)",
+        transport_label = "tls" if self.config.tls_enabled else "tcp"
+        self.logger.info("Listening on %s:%d (%s/%s)",
                          self.bind_ip, self.config.port,
-                         self.config.service_type)
+                         transport_label, self.config.protocol)
 
     async def serve(self) -> None:
         if self._server is None:
@@ -98,14 +99,20 @@ class PortServer:
         self.logger.info("Port %d shut down", self.config.port)
 
     def _build_ssl_context(self) -> ssl.SSLContext | None:
-        if self.config.service_type != "https":
+        if not self.config.tls_enabled:
             return None
         if not self.config.tls_certfile or not self.config.tls_keyfile:
-            self.logger.error("HTTPS service on port %d requires "
-                              "tls.certfile and tls.keyfile", self.config.port)
+            self.logger.error("TLS on port %d requires [tls] certfile "
+                              "and keyfile", self.config.port)
             return None
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(self.config.tls_certfile, self.config.tls_keyfile)
+        try:
+            ctx.load_cert_chain(self.config.tls_certfile,
+                                self.config.tls_keyfile)
+        except (OSError, ssl.SSLError) as e:
+            self.logger.error("TLS cert load failed on port %d: %s",
+                              self.config.port, e)
+            return None
         return ctx
 
     async def _handle_connection(self, reader: asyncio.StreamReader,
@@ -715,7 +722,7 @@ def _config_signature(cfg) -> tuple:
     return (
         cfg.port, cfg.service_type, cfg.protocol, cfg.transport,
         cfg.encoding, cfg.default_response, cfg.description,
-        cfg.tls_certfile, cfg.tls_keyfile,
+        cfg.tls_enabled, cfg.tls_certfile, cfg.tls_keyfile,
         tuple((r.name, r.pattern.pattern, r.response) for r in cfg.rules),
         None if cfg.response_headers is None else (
             cfg.response_headers.status_line,

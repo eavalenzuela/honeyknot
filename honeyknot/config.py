@@ -33,6 +33,7 @@ class ServiceConfig:
     default_response: str = ""
     encoding: str = "utf-8"
     description: str = ""
+    tls_enabled: bool = False
     tls_certfile: str | None = None
     tls_keyfile: str | None = None
     protocol_opts: dict = field(default_factory=dict)
@@ -46,10 +47,11 @@ VALID_PROTOCOLS = {
     "sip", "ipmi", "coap",
     "modbus", "mqtt", "mysql", "postgres",
     "imap", "pop3", "s7", "wsd",
+    "bacnet",
 }
 VALID_TRANSPORTS = {"tcp", "udp"}
 UDP_PROTOCOLS = {"dns", "snmp", "ssdp", "netbios_ns", "chargen", "memcached",
-                 "sip", "ipmi", "coap", "wsd"}
+                 "sip", "ipmi", "coap", "wsd", "bacnet"}
 
 
 def load_handler(path: Path) -> ServiceConfig:
@@ -129,8 +131,14 @@ def load_handler(path: Path) -> ServiceConfig:
             headers=rh.get("headers", []),
         )
 
-    # Parse TLS config if present
+    # Parse TLS config if present. Enabled automatically for:
+    #   - legacy service_type == "https"
+    #   - explicit [tls] enabled = true
+    #   - explicit [tls] with certfile + keyfile set (opt-in)
     tls = data.get("tls", {})
+    tls_enabled = bool(tls.get("enabled")) or service_type == "https"
+    if tls.get("certfile") and tls.get("keyfile") and "enabled" not in tls:
+        tls_enabled = True
 
     return ServiceConfig(
         port=svc["port"],
@@ -142,6 +150,7 @@ def load_handler(path: Path) -> ServiceConfig:
         response_headers=headers,
         default_response=data.get("default_response", {}).get("body", ""),
         encoding=svc.get("encoding", "utf-8"),
+        tls_enabled=tls_enabled,
         tls_certfile=tls.get("certfile"),
         tls_keyfile=tls.get("keyfile"),
         protocol_opts=protocol_opts,

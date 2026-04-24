@@ -1,11 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "honeyknot"
-version = "0.3.0"
-description = "A highly-configurable multi-port honeypot for farming malware"
+version = "0.4.0"
+description = "Multi-port multi-protocol honeypot for farming malware"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "honeyknot contributors" },
+]
+keywords = ["honeypot", "security", "malware", "threat-intel",
+            "network", "ics", "iot"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: POSIX :: BSD",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: System :: Networking :: Monitoring",
+]
+
+[project.urls]
+Homepage = "https://github.com/eavalenzuela/honeyknot"
+Source = "https://github.com/eavalenzuela/honeyknot"
+Issues = "https://github.com/eavalenzuela/honeyknot/issues"
+
+[project.optional-dependencies]
+yara = ["yara-python>=4.0"]
 
 [project.scripts]
 honeyknot = "honeyknot.cli:main"
+honeyknot-gencert = "honeyknot.gencert:main"
+
+[tool.setuptools]
+packages = ["honeyknot", "honeyknot.protocols"]
+
+[tool.setuptools.package-data]
+honeyknot = []
 
 [tool.ruff]
 target-version = "py311"

@@ -1,6 +1,6 @@
 """Honeyknot: A highly-configurable multi-port honeypot for farming malware."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 
 def run_from_interactive_shell(ip, handler_dir="handlers/", log_dir="logs/",

@@ -67,13 +67,32 @@ class MQTTHandler(ProtocolHandler):
         elif pkt_type == PKT_PINGREQ:
             await ctx.send(bytes([PKT_PINGRESP << 4, 0]))
         elif pkt_type == PKT_PUBLISH:
-            topic_len = int.from_bytes(payload[:2], "big") if len(payload) >= 2 else 0
-            topic = payload[2:2 + topic_len].decode("utf-8", errors="replace") \
-                if 2 + topic_len <= len(payload) else ""
-            logger.info("MQTT PUBLISH from %s: topic=%r (%d payload bytes)",
-                        ctx.addr, topic, len(payload))
+            qos = (flags >> 1) & 0x03
+            if len(payload) < 2:
+                return
+            topic_len = int.from_bytes(payload[:2], "big")
+            if 2 + topic_len > len(payload):
+                return
+            topic = payload[2:2 + topic_len].decode("utf-8", errors="replace")
+            pos = 2 + topic_len
+            packet_id = None
+            if qos > 0 and pos + 2 <= len(payload):
+                packet_id = int.from_bytes(payload[pos:pos + 2], "big")
+                pos += 2
+            body = payload[pos:]
+            logger.info("MQTT PUBLISH from %s: topic=%r body=%d bytes "
+                        "qos=%d", ctx.addr, topic, len(body), qos)
             ctx.event("mqtt_publish",
-                      topic=topic, bytes=len(payload))
+                      topic=topic, qos=qos, packet_id=packet_id,
+                      body_bytes=len(body), body=body)
+            if qos == 1 and packet_id is not None:
+                # PUBACK: type=4 (<<4), remaining=2, packet_id
+                await ctx.send(bytes([0x40, 0x02])
+                               + packet_id.to_bytes(2, "big"))
+            elif qos == 2 and packet_id is not None:
+                # PUBREC: type=5 (<<4), remaining=2, packet_id
+                await ctx.send(bytes([0x50, 0x02])
+                               + packet_id.to_bytes(2, "big"))
         elif pkt_type == PKT_SUBSCRIBE:
             # Reply SUBACK accepting all topic filters at QoS 0.
             if len(payload) < 2:

@@ -5,10 +5,17 @@ group. See `REWORK.md` for the historical phase plan that got us here.
 
 ## Status as of this file
 
-- 28 protocol handlers: regex + 12 stateful TCP (ssh, smtp, ftp, telnet,
+- 29 protocol handlers: regex + 12 stateful TCP (ssh, smtp, ftp, telnet,
   redis, vnc, http, mqtt, mysql, postgres, imap, pop3) + 5 binary TCP
-  (smb, mssql, rdp, modbus, s7) + 10 UDP (dns, snmp, ssdp, netbios_ns,
-  chargen, memcached, sip, ipmi, coap, wsd)
+  (smb, mssql, rdp, modbus, s7) + 11 UDP (dns, snmp, ssdp, netbios_ns,
+  chargen, memcached, sip, ipmi, coap, wsd, bacnet)
+- Generic TLS wrapping (`[tls] enabled = true` on any TCP handler);
+  bundled IMAPS/POP3S/MQTTS/SMTPS TOMLs; `python -m honeyknot.gencert`
+  self-signed cert helper
+- MQTT PUBLISH now captures topic + payload bytes for IOC pipeline
+- `EVENTS.md` catalog enumerating every emitted event with fields
+- PyPI-ready packaging (setuptools build-system, classifiers,
+  `honeyknot-gencert` entry point)
 - Single asyncio event loop, one process
 - Raw per-session captures, content-addressed sample store (SHA-256) with
   `.meta.json` sidecars, JSONL event log with size-based rotation, IOC
@@ -64,13 +71,13 @@ group. See `REWORK.md` for the historical phase plan that got us here.
       / Read Device ID.
 - [x] **S7 (TCP/102)** — COTP Connection Confirm + S7 Setup
       Communication ack; logs subsequent Job frames.
-- [ ] **BACnet (UDP/47808)** — add when there is demonstrated traffic
-      on a deployed instance.
+- [x] **BACnet/IP (UDP/47808)** — Who-Is → I-Am responder with
+      configurable device instance and vendor id.
 - [x] **CoAP (UDP/5683)** — parser + 2.05 Content ack.
 - [x] **MQTT (TCP/1883)** — CONNECT parser that captures
       client_id/user/pass; CONNACK + SUBACK + PINGRESP.
-- [ ] **MQTT over TLS (TCP/8883)** — add once broader TLS composition
-      testing is in place.
+- [x] **MQTT over TLS (TCP/8883)** — generic `[tls]` wrapping enables
+      this; bundled `mqtts_8883.toml` ready.
 - [x] **WS-Discovery (UDP/3702)** — Probe logger + non-amplifying
       ProbeMatches reply (guaranteed smaller than request).
 - [x] **MySQL (TCP/3306)** — server-first greeting; login capture;
@@ -79,9 +86,11 @@ group. See `REWORK.md` for the historical phase plan that got us here.
       password capture.
 - [x] **IMAP (TCP/143)** — LOGIN + AUTHENTICATE PLAIN credential capture.
 - [x] **POP3 (TCP/110)** — APOP banner + USER/PASS / APOP digest capture.
-- [ ] **Telnet over TLS (TCP/992)**, **DNS-over-TLS (TCP/853)**,
-      **IMAP-TLS (TCP/993)**, **POP3-TLS (TCP/995)** — regularly probed;
-      add once broader TLS composition testing is in place.
+- [x] **IMAP-TLS (TCP/993)** and **POP3-TLS (TCP/995)** — bundled
+      `imaps_993.toml` and `pop3s_995.toml` use generic TLS wrapping.
+- [x] **SMTPS (TCP/465)** — bundled `smtps_465.toml`.
+- [ ] **Telnet-TLS (TCP/992)** and **DNS-over-TLS (TCP/853)** — add
+      TOMLs when there is demonstrated traffic on a deployed instance.
 - [x] **HTTPS coverage for the new HTTP handler.** Verified live with a
       self-signed cert: TLS terminates, Content-Length body is consumed
       in full, rules match.
@@ -142,5 +151,7 @@ group. See `REWORK.md` for the historical phase plan that got us here.
       Consider matching against bytes regex directly.
 - [x] CI: `.github/workflows/ci.yml` runs ruff + pytest on push and PR
       across Python 3.11 / 3.12 / 3.13.
-- [ ] Publish to PyPI as `honeyknot`, so users can `pipx install honeyknot`
-      instead of running from a clone.
+- [~] PyPI packaging wired up in `pyproject.toml` (setuptools
+      build-system, classifiers, `honeyknot` + `honeyknot-gencert`
+      entry points). Wheel builds locally. Actual upload to PyPI is
+      a release chore and not yet done.

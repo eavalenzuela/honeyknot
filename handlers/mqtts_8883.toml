@@ -1,0 +1,11 @@
+# MQTT over TLS on TCP/8883.
+
+[service]
+port = 8883
+protocol = "mqtt"
+description = "MQTTS — MQTT wrapped in TLS"
+
+[tls]
+enabled = true
+certfile = "logs/tls.cert"
+keyfile = "logs/tls.key"

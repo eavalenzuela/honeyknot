@@ -1,0 +1,10 @@
+# BACnet/IP honeypot on UDP/47808
+
+[service]
+port = 47808
+protocol = "bacnet"
+description = "BACnet/IP Who-Is → I-Am responder"
+
+[bacnet]
+device_instance = 1
+vendor_id = 260

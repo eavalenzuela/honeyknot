@@ -1,0 +1,14 @@
+# SMTP over TLS ("submission-over-TLS") on TCP/465.
+
+[service]
+port = 465
+protocol = "smtp"
+description = "SMTPS — SMTP wrapped in TLS"
+
+[tls]
+enabled = true
+certfile = "logs/tls.cert"
+keyfile = "logs/tls.key"
+
+[smtp]
+hostname = "mail.honeyknot"

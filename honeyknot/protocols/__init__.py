@@ -7,6 +7,7 @@ per-connection state via a `ConnectionContext`.
 """
 
 from honeyknot.config import ServiceConfig
+from honeyknot.protocols.bacnet import BACnetHandler
 from honeyknot.protocols.base import (
     ConnectionContext,
     DatagramContext,
@@ -42,6 +43,7 @@ from honeyknot.protocols.vnc import VNCHandler
 from honeyknot.protocols.wsd import WSDHandler
 
 __all__ = [
+    "BACnetHandler",
     "ChargenHandler",
     "CoAPHandler",
     "ConnectionContext",
@@ -105,6 +107,7 @@ _REGISTRY: dict[str, type[ProtocolHandler]] = {
     "pop3": POP3Handler,
     "s7": S7Handler,
     "wsd": WSDHandler,
+    "bacnet": BACnetHandler,
 }
 
 

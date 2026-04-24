@@ -79,7 +79,9 @@ Every event in `events.jsonl` carries `ts`, `event`, `transport`, `port`,
 - `protocol` — handler-specific signal: `credentials`, `shell_command`, `http_request`, `vnc_auth_attempt`, etc.
 
 All of these that describe one session share the same `sha256` and `peer`,
-so correlating "which IP dropped this binary" is a trivial filter.
+so correlating "which IP dropped this binary" is a trivial filter. See
+[`EVENTS.md`](EVENTS.md) for the complete event catalog with required /
+optional fields and join patterns.
 
 ## Handler definitions
 
@@ -140,8 +142,16 @@ response = '<?php system($_REQUEST["cmd"]); ?>'
 - `pattern` — Python regex, compiled at load time, case-insensitive
 - `response` — string
 
-`[tls]` *(for `type = "https"`)*
-- `certfile`, `keyfile` — paths to a PEM cert/key pair
+`[tls]` *(optional; wraps any TCP handler in TLS)*
+- `enabled` — `true` to enable; also implicit if `type = "https"` or if
+  both `certfile` and `keyfile` are set
+- `certfile`, `keyfile` — paths to a PEM cert/key pair. For dev/demo,
+  generate them with:
+  ```bash
+  python -m honeyknot.gencert        # writes logs/tls.{cert,key}
+  ```
+  The bundled IMAPS/POP3S/MQTTS/SMTPS TOMLs reference `logs/tls.*` by
+  default.
 
 `[<protocol>]` — optional per-handler options, e.g. `[ssh] banner = ...`,
 `[smtp] hostname = ...`, `[dns] answer_a = "1.2.3.4"`.
@@ -180,6 +190,7 @@ response = '<?php system($_REQUEST["cmd"]); ?>'
 - `ipmi` — ASF-RMCP Presence Pong
 - `coap` — parses header + Uri-Path; returns 2.05 Content ack
 - `wsd` — WS-Discovery Probe logger + non-amplifying ProbeMatches
+- `bacnet` — BACnet/IP Who-Is → I-Am responder (configurable device instance + vendor id)
 
 **Fallback:**
 - `regex` — back-compat one-shot client-speaks-first matcher; the default

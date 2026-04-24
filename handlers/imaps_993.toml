@@ -1,0 +1,13 @@
+# IMAP over TLS on TCP/993.
+# Generate a cert first:  python -m honeyknot.gencert
+# Or point certfile/keyfile at a real cert pair.
+
+[service]
+port = 993
+protocol = "imap"
+description = "IMAPS — IMAP wrapped in TLS"
+
+[tls]
+enabled = true
+certfile = "logs/tls.cert"
+keyfile = "logs/tls.key"

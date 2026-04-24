@@ -1,0 +1,11 @@
+# POP3 over TLS on TCP/995.
+
+[service]
+port = 995
+protocol = "pop3"
+description = "POP3S — POP3 wrapped in TLS"
+
+[tls]
+enabled = true
+certfile = "logs/tls.cert"
+keyfile = "logs/tls.key"
