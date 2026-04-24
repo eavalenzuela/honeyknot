@@ -9,22 +9,27 @@ group. See `REWORK.md` for the historical phase plan that got us here.
   redis, vnc) + 3 binary TCP (smb, mssql, rdp) + 6 UDP
   (dns, snmp, ssdp, netbios_ns, chargen, memcached) + proper http
 - Single asyncio event loop, one process
-- Raw per-session captures, content-addressed sample store (SHA-256), JSONL
-  event log with size-based rotation, IOC extraction at capture time
-- 124 tests passing, ruff clean
+- Raw per-session captures, content-addressed sample store (SHA-256) with
+  `.meta.json` sidecars, JSONL event log with size-based rotation, IOC
+  extraction at capture time with gzip/zlib/base64 one-layer peel
+- Per-source rate limiting (token bucket per IP)
+- Privilege drop via `--run-as-user` / `--run-as-group`
+- Handler supervision: a crashed serve task emits a `port_down` event
+- Write buffer bounds on every TCP connection (OOM protection)
+- HTTPS composition verified (type=https + protocol=http)
+- GitHub Actions CI (ruff + pytest on 3.11/3.12/3.13)
+- 135 tests passing, ruff clean
 
 ## Capture quality & analysis
 
 - [ ] **YARA integration.** Optional — only run if `yara-python` is installed.
       Emit `yara_match` events with rule name + meta. Best single addition
       for turning the sample store into a usable corpus.
-- [ ] **Per-source rate limiting.** Token bucket keyed by peer IP; drop (or
-      tarpit) above N connections/sec and M bytes/sec. Without this, a
-      single aggressive scanner fills the disk.
-- [ ] **Transparent decompression in the IOC extractor.** A lot of droppers
-      arrive base64-encoded or gzip-wrapped; unpack one layer before
-      running regexes. Currently a gzip dropper bypasses IOC extraction
-      entirely.
+- [x] **Per-source rate limiting.** Token-bucket limiter in
+      `honeyknot/ratelimit.py`; configurable via `--rate-limit-capacity` and
+      `--rate-limit-refill`. Emits `rate_limited` event on drop.
+- [x] **Transparent decompression in the IOC extractor.** One layer of
+      gzip / zlib / base64 is peeled off before regex extraction.
 - [ ] **PCAP-ng export.** Phase 4 item 12, deferred. Lets existing malware
       tooling (Zeek, Suricata, wireshark session reassembly) ingest the
       capture directly instead of going through our raw `.bin` format.
@@ -32,10 +37,9 @@ group. See `REWORK.md` for the historical phase plan that got us here.
       either a size-based sweeper task or documented external cron. Low
       urgency now that `samples/` carries the unique content — raw exists
       only for session ordering.
-- [ ] **Sample metadata sidecar.** Alongside `samples/<xx>/<sha>.bin`, write
-      `<sha>.meta.json` with first-seen timestamp, hit count, top peers,
-      extracted IOCs aggregated. Avoids having to replay `events.jsonl` to
-      answer "what do we know about this sample?"
+- [x] **Sample metadata sidecar.** `logs/samples/<xx>/<sha>.meta.json` now
+      tracks `first_seen`, `last_seen`, `hit_count`, `size`, distinct
+      `peers` (capped at 50), and aggregated `iocs`.
 
 ## Missing high-value protocols
 
@@ -49,16 +53,15 @@ group. See `REWORK.md` for the historical phase plan that got us here.
 - [ ] **Telnet over TLS (TCP/992)**, **DNS-over-TLS (TCP/853)**,
       **MySQL (TCP/3306)**, **Postgres (TCP/5432)**, **IMAP (TCP/143/993)**,
       **POP3 (TCP/110/995)** — all regularly probed, none implemented.
-- [ ] **HTTPS coverage for the new HTTP handler.** The HTTP handler currently
-      composes with `type = "https"` via `asyncio.start_server`'s ssl
-      parameter, but this path is **not** verified by smoke test — do it.
+- [x] **HTTPS coverage for the new HTTP handler.** Verified live with a
+      self-signed cert: TLS terminates, Content-Length body is consumed
+      in full, rules match.
 
 ## Operational readiness
 
-- [ ] **Privilege drop.** Bind sockets as root, then `os.setuid` /
-      `os.setgid` to an unprivileged user before `serve_forever`. Add a
-      `--run-as` CLI flag. Without this, a handler bug on port 22 gives
-      the attacker a root process.
+- [x] **Privilege drop.** `--run-as-user` / `--run-as-group` flags: bind
+      as root, drop to unprivileged user via setgroups/setgid/setuid
+      *after* all listeners are bound, *before* accepting connections.
 - [ ] **Prometheus metrics endpoint.** Bind `127.0.0.1:<port>` with a
       tiny text-format exporter: connections-per-port, unique samples,
       analyzer hits, IOC events, rotations, write errors. Cheap
@@ -68,24 +71,21 @@ group. See `REWORK.md` for the historical phase plan that got us here.
       `ProtectSystem=strict`, `PrivateTmp=yes`. Pairs with privilege drop.
 - [ ] **Dockerfile** (multi-stage, distroless final) + `docker-compose.yml`
       demoing handler volume mount and log-volume persistence.
-- [ ] **Handler supervision / restart.** An exception inside `on_connect`
-      of one protocol currently just logs and drops the connection —
-      that's fine. But a persistent bug that makes `serve_forever` raise
-      would silently leak the port. Wrap `serve_tasks` with restart-on-
-      failure logic and emit a `port_down` event.
-- [ ] **Back-pressure on slow clients.** `asyncio.StreamWriter.write` is
-      unbounded; a client that refuses to read our response grows the
-      write buffer until OOM. Call `writer.set_write_buffer_limits(high,
-      low)` on accept and drop on high-water hit.
+- [~] **Handler supervision.** A serve task that exits with an exception
+      now emits a `port_down` event with the error string. Automatic
+      restart is still TODO — currently the port stays down until the
+      daemon is restarted.
+- [x] **Back-pressure on slow clients.** Every TCP connection gets
+      `set_write_buffer_limits(high=64 KiB, low=16 KiB)` on accept.
 - [ ] **SIGHUP reload.** Reload handler TOMLs without restarting the
       daemon. Useful for tuning rule sets under live traffic.
 
 ## Protocol / code correctness gaps
 
-- [ ] **Binary frames logged as text.** SMB and RDP `ctx.request_logger.info`
-      calls embed hex blobs into the rotating per-port log, which is
-      painful to grep. Either emit only a hex digest + length, or route
-      binary traffic to the raw sink only.
+- [x] **Binary frames logged as text.** False alarm on audit: SMB already
+      logs compactly (`"%d bytes (head=<hex>)"`), and RDP/MSSQL don't use
+      the per-port request logger at all — they emit semantic messages
+      to their module loggers.
 - [ ] **No handler-isolation lint.** A handler that writes to `self.foo`
       instead of `ctx.state["foo"]` would silently leak between sessions.
       Add a lightweight ast-based lint pass in CI.
@@ -108,12 +108,11 @@ group. See `REWORK.md` for the historical phase plan that got us here.
       on purpose (chargen, memcached, netbios_ns, ssdp, snmp are all
       shipped — but worth double-checking the bundled set matches what
       users are likely to enable by default).
-- [ ] `logs/` is in the repo as a directory with some old root-owned
-      files; add a `logs/.gitkeep` and put `logs/*` in `.gitignore`.
+- [x] `logs/` is now in `.gitignore`.
 - [ ] The regex handler still decodes the full incoming chunk as UTF-8
       before matching; for partly binary protocols this wastes CPU.
       Consider matching against bytes regex directly.
-- [ ] CI: there is no CI configured. A GitHub Actions workflow running
-      `ruff` + `pytest` on push would be ~20 lines of YAML.
+- [x] CI: `.github/workflows/ci.yml` runs ruff + pytest on push and PR
+      across Python 3.11 / 3.12 / 3.13.
 - [ ] Publish to PyPI as `honeyknot`, so users can `pipx install honeyknot`
       instead of running from a clone.

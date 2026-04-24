@@ -1,7 +1,9 @@
 """Asyncio-based concurrency: one event loop, many listeners, per-port handlers."""
 
 import asyncio
+import contextlib
 import logging
+import os
 import signal
 import ssl
 from datetime import UTC, datetime
@@ -18,6 +20,7 @@ from honeyknot.protocols import (
     ProtocolHandler,
     get_handler,
 )
+from honeyknot.ratelimit import RateLimiter
 from honeyknot.samples import SampleStore
 
 logger = logging.getLogger("honeyknot.server")
@@ -25,6 +28,8 @@ logger = logging.getLogger("honeyknot.server")
 DEFAULT_MAX_CAPTURE_BYTES = 10 * 1024 * 1024  # 10 MB per connection
 READ_CHUNK = 65536
 ACCEPT_BACKLOG = 128
+WRITE_BUFFER_HIGH = 64 * 1024
+WRITE_BUFFER_LOW = 16 * 1024
 
 
 class PortServer:
@@ -33,13 +38,15 @@ class PortServer:
     def __init__(self, config: ServiceConfig, bind_ip: str, log_dir: str,
                  max_capture_bytes: int = DEFAULT_MAX_CAPTURE_BYTES,
                  events: EventSink | None = None,
-                 samples: SampleStore | None = None):
+                 samples: SampleStore | None = None,
+                 rate_limiter: RateLimiter | None = None):
         self.config = config
         self.bind_ip = bind_ip
         self.log_dir = Path(log_dir)
         self.max_capture_bytes = max_capture_bytes
         self.events = events
         self.samples = samples
+        self.rate_limiter = rate_limiter
         self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
         self.request_logger = get_port_logger(config.port, log_dir)
         self.handler: ProtocolHandler = get_handler(config)
@@ -96,7 +103,26 @@ class PortServer:
     async def _handle_connection(self, reader: asyncio.StreamReader,
                                  writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername") or ("?", 0)
+        peer_ip = peer[0] if peer else "?"
+
+        if self.rate_limiter is not None and not self.rate_limiter.check(peer_ip):
+            self.logger.info("Rate-limited %s on port %d", peer, self.config.port)
+            self._emit("rate_limited", peer)
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return
+
         self.logger.info("Connection from %s on port %d", peer, self.config.port)
+
+        # Bound asyncio's write buffer so a slow/silent reader can't
+        # grow it unbounded and OOM us.
+        with contextlib.suppress(AttributeError, NotImplementedError):
+            writer.transport.set_write_buffer_limits(
+                high=WRITE_BUFFER_HIGH, low=WRITE_BUFFER_LOW,
+            )
 
         capture_path, capture_file = self._open_capture(peer)
         captured = bytearray()
@@ -214,6 +240,12 @@ class PortServer:
                 sha256=digest, bytes=len(data),
             )
 
+        if self.samples is not None and digest is not None and _path is not None:
+            self.samples.update_meta(
+                digest, size=len(data), peer=peer,
+                iocs=iocs, analyzer=result,
+            )
+
         return digest
 
 
@@ -228,6 +260,14 @@ class _UdpProtocol(asyncio.DatagramProtocol):
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr: tuple) -> None:
+        peer_ip = addr[0] if addr else "?"
+        if (self.owner.rate_limiter is not None
+                and not self.owner.rate_limiter.check(peer_ip)):
+            self.owner.logger.info("Rate-limited datagram from %s on port %d",
+                                   addr, self.owner.config.port)
+            self.owner._emit("rate_limited", addr)
+            return
+
         self.owner.logger.info("Datagram from %s on port %d (%d bytes)",
                                addr, self.owner.config.port, len(data))
         capture_path = self.owner._dump_raw(data, addr)
@@ -261,12 +301,14 @@ class UdpPortServer:
 
     def __init__(self, config: ServiceConfig, bind_ip: str, log_dir: str,
                  events: EventSink | None = None,
-                 samples: SampleStore | None = None):
+                 samples: SampleStore | None = None,
+                 rate_limiter: RateLimiter | None = None):
         self.config = config
         self.bind_ip = bind_ip
         self.log_dir = Path(log_dir)
         self.events = events
         self.samples = samples
+        self.rate_limiter = rate_limiter
         self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
         self.request_logger = get_port_logger(config.port, log_dir)
         self.handler: ProtocolHandler = get_handler(config)
@@ -351,6 +393,12 @@ class UdpPortServer:
                 sha256=digest, bytes=len(data),
             )
 
+        if self.samples is not None and digest is not None and _path is not None:
+            self.samples.update_meta(
+                digest, size=len(data), peer=peer,
+                iocs=iocs, analyzer=result,
+            )
+
         return digest
 
 
@@ -361,7 +409,11 @@ class HoneyknotDaemon:
                  log_dir: str = "logs/", thread_count: int = 5,
                  max_capture_bytes: int = DEFAULT_MAX_CAPTURE_BYTES,
                  event_log_max_bytes: int | None = None,
-                 event_log_backups: int | None = None):
+                 event_log_backups: int | None = None,
+                 rate_limit_capacity: float = 20.0,
+                 rate_limit_refill_per_sec: float = 5.0,
+                 run_as_user: str | None = None,
+                 run_as_group: str | None = None):
         self.bind_ip = bind_ip
         self.handler_dir = handler_dir
         self.log_dir = log_dir
@@ -370,6 +422,10 @@ class HoneyknotDaemon:
         self.max_capture_bytes = max_capture_bytes
         self.event_log_max_bytes = event_log_max_bytes
         self.event_log_backups = event_log_backups
+        self.rate_limit_capacity = rate_limit_capacity
+        self.rate_limit_refill_per_sec = rate_limit_refill_per_sec
+        self.run_as_user = run_as_user
+        self.run_as_group = run_as_group
 
     def start(self) -> None:
         asyncio.run(self._run())
@@ -385,20 +441,27 @@ class HoneyknotDaemon:
             event_kwargs["backup_count"] = self.event_log_backups
         events = EventSink(self.log_dir, **event_kwargs)
         samples = SampleStore(self.log_dir)
+        limiter = RateLimiter(
+            capacity=self.rate_limit_capacity,
+            refill_per_sec=self.rate_limit_refill_per_sec,
+        )
 
         servers: list = []
         for cfg in configs:
             if cfg.transport == "udp":
                 servers.append(UdpPortServer(
-                    cfg, self.bind_ip, self.log_dir, events, samples,
+                    cfg, self.bind_ip, self.log_dir, events, samples, limiter,
                 ))
             else:
                 servers.append(PortServer(
                     cfg, self.bind_ip, self.log_dir,
-                    self.max_capture_bytes, events, samples,
+                    self.max_capture_bytes, events, samples, limiter,
                 ))
 
         await asyncio.gather(*(s.start() for s in servers))
+
+        # Drop privileges *after* binding, *before* accepting connections.
+        self._drop_privileges()
 
         stop_event = asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -415,6 +478,11 @@ class HoneyknotDaemon:
                 signal.signal(sig, lambda s, f: stop_event.set())
 
         serve_tasks = [asyncio.create_task(s.serve()) for s in servers]
+        for task, server in zip(serve_tasks, servers, strict=True):
+            task.add_done_callback(
+                lambda t, srv=server, ev=events: _on_serve_done(t, srv, ev),
+            )
+
         await stop_event.wait()
 
         for t in serve_tasks:
@@ -424,3 +492,64 @@ class HoneyknotDaemon:
 
         events.close()
         logger.info("Honeyknot shut down")
+
+    def _drop_privileges(self) -> None:
+        """Switch to an unprivileged user after sockets are bound.
+
+        No-op on non-POSIX systems, when not running as root, or when
+        neither --run-as-user nor --run-as-group is set.
+        """
+        if self.run_as_user is None and self.run_as_group is None:
+            return
+        if os.geteuid() != 0:
+            logger.warning("Not running as root; --run-as-user/--run-as-group "
+                           "ignored")
+            return
+        # POSIX-only — import lazily so Windows doesn't break at import time
+        import grp
+        import pwd
+
+        gid = None
+        if self.run_as_group is not None:
+            gid = grp.getgrnam(self.run_as_group).gr_gid
+        uid = None
+        user_gid = None
+        if self.run_as_user is not None:
+            pw = pwd.getpwnam(self.run_as_user)
+            uid = pw.pw_uid
+            user_gid = pw.pw_gid
+
+        # Order matters: drop groups first, then setgid, then setuid.
+        if uid is not None:
+            try:
+                os.setgroups([])
+            except (OSError, PermissionError) as e:
+                logger.warning("setgroups([]) failed: %s", e)
+        effective_gid = gid if gid is not None else user_gid
+        if effective_gid is not None:
+            os.setgid(effective_gid)
+        if uid is not None:
+            os.setuid(uid)
+
+        logger.info("Dropped privileges to uid=%s gid=%s", uid, effective_gid)
+
+
+def _on_serve_done(task: asyncio.Task, server, events: EventSink | None) -> None:
+    """Called when a serve task exits. Cancellation is normal; anything
+    else (including an unhandled exception from asyncio internals) is a
+    port-down signal we want on the record."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    port = server.config.port
+    if exc is None:
+        # Server.serve_forever returning without cancellation means the
+        # server was stopped cleanly — also normal.
+        return
+    logger.error("Port %d serve task crashed: %s", port, exc)
+    if events is not None:
+        events.emit(
+            "port_down", transport=server.config.transport,
+            port=port, protocol=server.config.protocol,
+            error=repr(exc),
+        )

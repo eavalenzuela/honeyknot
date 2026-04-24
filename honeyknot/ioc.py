@@ -19,7 +19,11 @@ Each list is deduplicated and capped.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import gzip
 import re
+import zlib
 
 # URLs — http/https scheme, reasonable domain chars, optional port + path.
 _URL_RE = re.compile(
@@ -52,29 +56,104 @@ _SHELL_RE = re.compile(
 
 MAX_PER_KIND = 20
 MIN_PRINTABLE_RATIO = 0.5
+# Minimum size of a base64 run we'll try to decode. Below this it's just
+# noise that happens to look base64-ish.
+MIN_BASE64_RUN = 64
+# Cap on decoded bytes per layer so an evil payload can't make us
+# allocate arbitrary memory.
+MAX_DECODED_BYTES = 2 * 1024 * 1024
+
+_BASE64_RUN_RE = re.compile(rb"[A-Za-z0-9+/]{%d,}={0,2}" % MIN_BASE64_RUN)
 
 
 def extract_iocs(data: bytes) -> dict[str, list[str]] | None:
-    """Return extracted indicators, or None if nothing worth reporting."""
+    """Return extracted indicators, or None if nothing worth reporting.
+
+    Runs regexes over `data` directly (if it's text-like) and over any
+    single layer of gzip/zlib/base64 decoding we can peel off. IOCs
+    from decoded layers are merged with top-level hits and then
+    deduplicated.
+    """
     if len(data) < 8:
         return None
-    if _printable_ratio(data) < MIN_PRINTABLE_RATIO:
-        return None
 
-    urls = _dedup_cap(_URL_RE.findall(data))
-    ips = _dedup_cap(_IPV4_RE.findall(data), filter_noise=_noisy_ip)
-    downloads = _dedup_cap(_DOWNLOAD_RE.findall(data))
-    shell = _dedup_cap(_SHELL_RE.findall(data))
+    urls: list[bytes] = []
+    ips: list[bytes] = []
+    downloads: list[bytes] = []
+    shell: list[bytes] = []
 
-    if not (urls or ips or downloads or shell):
-        return None
+    for layer in _decoded_layers(data):
+        # Per-layer printable gate: skip mostly-binary layers entirely to
+        # avoid hallucinating IPs/URLs out of random bytes. Decoded layers
+        # from gzip/base64 re-qualify here on their own merits.
+        if _printable_ratio(layer) < MIN_PRINTABLE_RATIO:
+            continue
+        urls.extend(_URL_RE.findall(layer))
+        ips.extend(_IPV4_RE.findall(layer))
+        downloads.extend(_DOWNLOAD_RE.findall(layer))
+        shell.extend(_SHELL_RE.findall(layer))
 
-    return {
-        "urls": urls,
-        "ips": ips,
-        "downloads": downloads,
-        "shell": shell,
+    result = {
+        "urls": _dedup_cap(urls),
+        "ips": _dedup_cap(ips, filter_noise=_noisy_ip),
+        "downloads": _dedup_cap(downloads),
+        "shell": _dedup_cap(shell),
     }
+    if not any(result.values()):
+        return None
+    return result
+
+
+def _decoded_layers(data: bytes):
+    """Yield `data` and up to one decoded layer of gzip/zlib/base64.
+
+    Gzip/zlib magic is searched for anywhere in the buffer, not just at
+    position 0, because attacker payloads typically arrive inside HTTP
+    or other protocol framing that pushes the magic past the head.
+    """
+    yield data
+
+    # gzip magic \x1f\x8b\x08 (deflate is the only real compression method).
+    # Scan for all offsets so we also catch gzip blobs embedded in HTTP
+    # bodies, etc.
+    gz_offsets: list[int] = []
+    start = 0
+    while True:
+        idx = data.find(b"\x1f\x8b\x08", start)
+        if idx == -1 or len(gz_offsets) >= 4:
+            break
+        gz_offsets.append(idx)
+        start = idx + 3
+    for idx in gz_offsets:
+        try:
+            decoded = gzip.decompress(data[idx:])
+        except (OSError, EOFError, zlib.error):
+            continue
+        if decoded and len(decoded) <= MAX_DECODED_BYTES:
+            yield decoded
+
+    # raw zlib at position 0 only — too many false positives mid-stream
+    if data[:1] == b"\x78":
+        try:
+            decoded = zlib.decompress(data)
+            if decoded and len(decoded) <= MAX_DECODED_BYTES:
+                yield decoded
+        except zlib.error:
+            pass
+
+    # base64-looking runs embedded in text. We try each run independently;
+    # typical case is a single long blob inside a webshell or powershell -enc.
+    seen_decoded: set[bytes] = set()
+    for match in _BASE64_RUN_RE.findall(data):
+        if match in seen_decoded:
+            continue
+        seen_decoded.add(match)
+        try:
+            decoded = base64.b64decode(match, validate=True)
+        except (binascii.Error, ValueError):
+            continue
+        if decoded and len(decoded) <= MAX_DECODED_BYTES:
+            yield decoded
 
 
 def _printable_ratio(data: bytes) -> float:

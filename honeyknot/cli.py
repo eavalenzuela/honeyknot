@@ -40,6 +40,24 @@ def main():
         "--event-log-backups", dest="event_log_backups", type=int, default=None,
         help="number of rotated events.jsonl backups to keep (default: 10)",
     )
+    parser.add_argument(
+        "--rate-limit-capacity", dest="rate_limit_capacity", type=float,
+        default=20.0,
+        help="token bucket capacity per source IP; <=0 disables (default: 20)",
+    )
+    parser.add_argument(
+        "--rate-limit-refill", dest="rate_limit_refill_per_sec", type=float,
+        default=5.0,
+        help="per-IP token refill rate in tokens/sec (default: 5)",
+    )
+    parser.add_argument(
+        "--run-as-user", dest="run_as_user", default=None,
+        help="switch to this unprivileged user after binding sockets",
+    )
+    parser.add_argument(
+        "--run-as-group", dest="run_as_group", default=None,
+        help="switch to this group after binding sockets",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_dir, verbose=args.verbose)
@@ -51,6 +69,10 @@ def main():
         thread_count=args.thread_count,
         event_log_max_bytes=args.event_log_max_bytes,
         event_log_backups=args.event_log_backups,
+        rate_limit_capacity=args.rate_limit_capacity,
+        rate_limit_refill_per_sec=args.rate_limit_refill_per_sec,
+        run_as_user=args.run_as_user,
+        run_as_group=args.run_as_group,
     )
     daemon.start()
 

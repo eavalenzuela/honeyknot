@@ -34,11 +34,17 @@ run_from_interactive_shell("0.0.0.0")
 | `-v` / `--verbose` | off | debug-level console logging |
 | `--event-log-max-bytes` | 100 MB | rotate `events.jsonl` at this size |
 | `--event-log-backups` | 10 | number of rotated backups to keep |
+| `--rate-limit-capacity` | 20 | token bucket capacity per source IP; `<=0` disables |
+| `--rate-limit-refill` | 5 | per-IP token refill rate (tokens/sec) |
+| `--run-as-user` | *none* | drop to this user after binding (root only) |
+| `--run-as-group` | *none* | drop to this group after binding (root only) |
 | `-tc` / `--thread-count` | 5 | accepted for back-compat; ignored under asyncio |
 
-Binding to ports <1024 requires root. There is no privilege-drop logic yet
-(see `ROADMAP.md`), so prefer running under a dedicated unprivileged user
-on non-privileged ports, or under a sandbox like `systemd`.
+Binding to ports <1024 requires root. Use `--run-as-user`/`--run-as-group`
+to drop privileges immediately after binding — the daemon will call
+`setgroups([])` + `setgid` + `setuid` before `serve_forever` is entered.
+If you bind only to non-privileged ports, just run as an unprivileged user
+to begin with.
 
 ## What you get when it runs
 

