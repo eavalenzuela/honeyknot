@@ -10,6 +10,7 @@ from pathlib import Path
 from honeyknot.analyzer import scan_payload
 from honeyknot.config import ServiceConfig, load_all_handlers
 from honeyknot.events import EventSink
+from honeyknot.ioc import extract_iocs
 from honeyknot.logger import get_port_logger
 from honeyknot.protocols import (
     ConnectionContext,
@@ -17,6 +18,7 @@ from honeyknot.protocols import (
     ProtocolHandler,
     get_handler,
 )
+from honeyknot.samples import SampleStore
 
 logger = logging.getLogger("honeyknot.server")
 
@@ -30,12 +32,14 @@ class PortServer:
 
     def __init__(self, config: ServiceConfig, bind_ip: str, log_dir: str,
                  max_capture_bytes: int = DEFAULT_MAX_CAPTURE_BYTES,
-                 events: EventSink | None = None):
+                 events: EventSink | None = None,
+                 samples: SampleStore | None = None):
         self.config = config
         self.bind_ip = bind_ip
         self.log_dir = Path(log_dir)
         self.max_capture_bytes = max_capture_bytes
         self.events = events
+        self.samples = samples
         self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
         self.request_logger = get_port_logger(config.port, log_dir)
         self.handler: ProtocolHandler = get_handler(config)
@@ -156,8 +160,8 @@ class PortServer:
                 await writer.wait_closed()
             except Exception:
                 pass
-            self._run_analyzer(bytes(captured), peer)
-            self._emit("close", peer, bytes_in=total)
+            digest = self._finalize_capture(bytes(captured), peer)
+            self._emit("close", peer, bytes_in=total, sha256=digest)
 
     def _open_capture(self, peer: tuple):
         ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -177,18 +181,40 @@ class PortServer:
                 protocol=self.config.protocol, peer=peer, **extra,
             )
 
-    def _run_analyzer(self, data: bytes, peer: tuple) -> None:
+    def _finalize_capture(self, data: bytes, peer: tuple) -> str | None:
+        """Hash, store, analyze, IOC-extract. Returns sha256 hex or None."""
         if len(data) < 4:
-            return
+            return None
+        digest, is_new, _path = (None, False, None)
+        if self.samples is not None:
+            digest, is_new, _path = self.samples.store(data)
+
         result = scan_payload(data)
-        if not result:
-            return
-        self.logger.info("Analyzer hit from %s: %s", peer, result)
-        if self.events is not None:
+        if result:
+            self.logger.info("Analyzer hit from %s: %s", peer, result)
+            if self.events is not None:
+                self.events.emit(
+                    "analyzer_hit", transport="tcp", port=self.config.port,
+                    protocol=self.config.protocol, peer=peer,
+                    sha256=digest, result=result,
+                )
+
+        iocs = extract_iocs(data)
+        if iocs and self.events is not None:
             self.events.emit(
-                "analyzer_hit", transport="tcp", port=self.config.port,
-                protocol=self.config.protocol, peer=peer, result=result,
+                "ioc", transport="tcp", port=self.config.port,
+                protocol=self.config.protocol, peer=peer,
+                sha256=digest, **iocs,
             )
+
+        if is_new and self.events is not None:
+            self.events.emit(
+                "sample_new", transport="tcp", port=self.config.port,
+                protocol=self.config.protocol, peer=peer,
+                sha256=digest, bytes=len(data),
+            )
+
+        return digest
 
 
 class _UdpProtocol(asyncio.DatagramProtocol):
@@ -216,10 +242,11 @@ class _UdpProtocol(asyncio.DatagramProtocol):
             request_logger=self.owner.request_logger,
             emit_event=_emit_protocol,
         )
+        digest = self.owner._finalize_datagram(data, addr)
         self.owner._emit("datagram", addr,
                          bytes=len(data),
-                         capture=str(capture_path) if capture_path else None)
-        self.owner._analyze_udp(data, addr)
+                         capture=str(capture_path) if capture_path else None,
+                         sha256=digest)
         asyncio.ensure_future(self._dispatch(data, ctx))
 
     async def _dispatch(self, data: bytes, ctx: DatagramContext) -> None:
@@ -233,11 +260,13 @@ class UdpPortServer:
     """One UDP listener for a single port, sharing the ProtocolHandler contract."""
 
     def __init__(self, config: ServiceConfig, bind_ip: str, log_dir: str,
-                 events: EventSink | None = None):
+                 events: EventSink | None = None,
+                 samples: SampleStore | None = None):
         self.config = config
         self.bind_ip = bind_ip
         self.log_dir = Path(log_dir)
         self.events = events
+        self.samples = samples
         self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
         self.request_logger = get_port_logger(config.port, log_dir)
         self.handler: ProtocolHandler = get_handler(config)
@@ -289,18 +318,40 @@ class UdpPortServer:
                 protocol=self.config.protocol, peer=peer, **extra,
             )
 
-    def _analyze_udp(self, data: bytes, peer: tuple) -> None:
+    def _finalize_datagram(self, data: bytes, peer: tuple) -> str | None:
+        """Hash, store, analyze, IOC-extract. Returns sha256 hex or None."""
         if len(data) < 4:
-            return
+            return None
+        digest, is_new, _path = (None, False, None)
+        if self.samples is not None:
+            digest, is_new, _path = self.samples.store(data)
+
         result = scan_payload(data)
-        if not result:
-            return
-        self.logger.info("Analyzer hit from %s: %s", peer, result)
-        if self.events is not None:
+        if result:
+            self.logger.info("Analyzer hit from %s: %s", peer, result)
+            if self.events is not None:
+                self.events.emit(
+                    "analyzer_hit", transport="udp", port=self.config.port,
+                    protocol=self.config.protocol, peer=peer,
+                    sha256=digest, result=result,
+                )
+
+        iocs = extract_iocs(data)
+        if iocs and self.events is not None:
             self.events.emit(
-                "analyzer_hit", transport="udp", port=self.config.port,
-                protocol=self.config.protocol, peer=peer, result=result,
+                "ioc", transport="udp", port=self.config.port,
+                protocol=self.config.protocol, peer=peer,
+                sha256=digest, **iocs,
             )
+
+        if is_new and self.events is not None:
+            self.events.emit(
+                "sample_new", transport="udp", port=self.config.port,
+                protocol=self.config.protocol, peer=peer,
+                sha256=digest, bytes=len(data),
+            )
+
+        return digest
 
 
 class HoneyknotDaemon:
@@ -333,17 +384,18 @@ class HoneyknotDaemon:
         if self.event_log_backups is not None:
             event_kwargs["backup_count"] = self.event_log_backups
         events = EventSink(self.log_dir, **event_kwargs)
+        samples = SampleStore(self.log_dir)
 
         servers: list = []
         for cfg in configs:
             if cfg.transport == "udp":
                 servers.append(UdpPortServer(
-                    cfg, self.bind_ip, self.log_dir, events,
+                    cfg, self.bind_ip, self.log_dir, events, samples,
                 ))
             else:
                 servers.append(PortServer(
                     cfg, self.bind_ip, self.log_dir,
-                    self.max_capture_bytes, events,
+                    self.max_capture_bytes, events, samples,
                 ))
 
         await asyncio.gather(*(s.start() for s in servers))
