@@ -126,6 +126,27 @@ class TestLoadHandler:
         assert config.protocol == "smtp"
         assert config.protocol_opts["hostname"] == "mx.example"
 
+    def test_udp_transport_auto_inferred(self, tmp_path):
+        f = tmp_path / "dns.toml"
+        f.write_text('[service]\nport = 53\nprotocol = "dns"\n')
+        config = load_handler(f)
+        assert config.protocol == "dns"
+        assert config.transport == "udp"
+
+    def test_transport_mismatch_rejected(self, tmp_path):
+        f = tmp_path / "bad.toml"
+        f.write_text(
+            '[service]\nport = 53\nprotocol = "dns"\ntransport = "tcp"\n'
+        )
+        with pytest.raises(ValueError, match="requires transport"):
+            load_handler(f)
+
+    def test_type_defaults_to_tcp_when_omitted(self, tmp_path):
+        f = tmp_path / "minimal.toml"
+        f.write_text('[service]\nport = 1234\n')
+        config = load_handler(f)
+        assert config.service_type == "tcp"
+
 
 class TestLoadAllHandlers:
     def test_loads_all_toml_files(self):

@@ -1,0 +1,6 @@
+# Memcached honeypot on UDP/11211 — non-amplifying
+
+[service]
+port = 11211
+protocol = "memcached"
+description = "Memcached responder that refuses to amplify"

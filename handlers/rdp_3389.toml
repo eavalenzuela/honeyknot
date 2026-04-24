@@ -1,0 +1,6 @@
+# RDP honeypot on TCP/3389
+
+[service]
+port = 3389
+protocol = "rdp"
+description = "RDP X.224 Connection Confirm + TLS ClientHello capture"

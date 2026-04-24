@@ -9,7 +9,12 @@ from pathlib import Path
 
 from honeyknot.config import ServiceConfig, load_all_handlers
 from honeyknot.logger import get_port_logger
-from honeyknot.protocols import ConnectionContext, ProtocolHandler, get_handler
+from honeyknot.protocols import (
+    ConnectionContext,
+    DatagramContext,
+    ProtocolHandler,
+    get_handler,
+)
 
 logger = logging.getLogger("honeyknot.server")
 
@@ -141,6 +146,96 @@ class PortServer:
             return None
 
 
+class _UdpProtocol(asyncio.DatagramProtocol):
+    """asyncio DatagramProtocol that bridges datagrams into a ProtocolHandler."""
+
+    def __init__(self, config: ServiceConfig, handler: ProtocolHandler,
+                 request_logger: logging.Logger, raw_dir: Path,
+                 logger_: logging.Logger):
+        self.config = config
+        self.handler = handler
+        self.request_logger = request_logger
+        self.raw_dir = raw_dir
+        self.logger = logger_
+        self.transport: asyncio.DatagramTransport | None = None
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def datagram_received(self, data: bytes, addr: tuple) -> None:
+        self.logger.info("Datagram from %s on port %d (%d bytes)",
+                         addr, self.config.port, len(data))
+        self._dump_raw(data, addr)
+        ctx = DatagramContext(
+            transport=self.transport,
+            addr=addr,
+            port=self.config.port,
+            request_logger=self.request_logger,
+        )
+        asyncio.ensure_future(self._dispatch(data, ctx))
+
+    async def _dispatch(self, data: bytes, ctx: DatagramContext) -> None:
+        try:
+            await self.handler.on_datagram(data, ctx)
+        except Exception:
+            self.logger.exception("Error handling datagram from %s", ctx.addr)
+
+    def _dump_raw(self, data: bytes, addr: tuple) -> None:
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        host = addr[0] if addr else "unknown"
+        safe_host = host.replace(":", "_").replace("/", "_")
+        path = self.raw_dir / f"{ts}_{safe_host}_{self.config.port}_udp.bin"
+        try:
+            with open(path, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            self.logger.error("Cannot write UDP capture %s: %s", path, e)
+
+
+class UdpPortServer:
+    """One UDP listener for a single port, sharing the ProtocolHandler contract."""
+
+    def __init__(self, config: ServiceConfig, bind_ip: str, log_dir: str):
+        self.config = config
+        self.bind_ip = bind_ip
+        self.log_dir = Path(log_dir)
+        self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
+        self.request_logger = get_port_logger(config.port, log_dir)
+        self.handler: ProtocolHandler = get_handler(config)
+        self._raw_dir = self.log_dir / "raw"
+        self._raw_dir.mkdir(parents=True, exist_ok=True)
+        self._transport: asyncio.DatagramTransport | None = None
+
+    async def start(self) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            self._transport, _ = await loop.create_datagram_endpoint(
+                lambda: _UdpProtocol(
+                    self.config, self.handler, self.request_logger,
+                    self._raw_dir, self.logger,
+                ),
+                local_addr=(self.bind_ip, self.config.port),
+            )
+        except OSError as e:
+            self.logger.error("Failed to bind UDP port %d: %s",
+                              self.config.port, e)
+            return
+        self.logger.info("Listening on %s:%d (udp/%s)",
+                         self.bind_ip, self.config.port, self.config.protocol)
+
+    async def serve(self) -> None:
+        # Datagram endpoints run on the loop; nothing to await here.
+        # Block forever so gather keeps this task alive until cancelled.
+        while self._transport is not None and not self._transport.is_closing():
+            await asyncio.sleep(3600)
+
+    async def stop(self) -> None:
+        if self._transport is None:
+            return
+        self._transport.close()
+        self.logger.info("UDP port %d shut down", self.config.port)
+
+
 class HoneyknotDaemon:
     """Top-level daemon: loads configs, runs all port listeners on one event loop."""
 
@@ -161,10 +256,14 @@ class HoneyknotDaemon:
         configs = load_all_handlers(self.handler_dir)
         logger.info("Loaded %d handler config(s)", len(configs))
 
-        servers = [
-            PortServer(cfg, self.bind_ip, self.log_dir, self.max_capture_bytes)
-            for cfg in configs
-        ]
+        servers: list = []
+        for cfg in configs:
+            if cfg.transport == "udp":
+                servers.append(UdpPortServer(cfg, self.bind_ip, self.log_dir))
+            else:
+                servers.append(PortServer(
+                    cfg, self.bind_ip, self.log_dir, self.max_capture_bytes,
+                ))
 
         await asyncio.gather(*(s.start() for s in servers))
 

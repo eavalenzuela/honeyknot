@@ -1,0 +1,6 @@
+# SNMP honeypot on UDP/161 — logs community-string probes silently
+
+[service]
+port = 161
+protocol = "snmp"
+description = "SNMP v1/v2c probe logger"

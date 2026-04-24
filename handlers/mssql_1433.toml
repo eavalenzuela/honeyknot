@@ -1,0 +1,6 @@
+# MSSQL honeypot on TCP/1433
+
+[service]
+port = 1433
+protocol = "mssql"
+description = "TDS Pre-Login responder that collects LOGIN7 payloads"

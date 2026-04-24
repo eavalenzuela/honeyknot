@@ -1,0 +1,6 @@
+# Chargen honeypot on UDP/19 — non-amplifying
+
+[service]
+port = 19
+protocol = "chargen"
+description = "Chargen responder that refuses to amplify"

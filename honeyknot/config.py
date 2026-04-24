@@ -26,7 +26,8 @@ class ServiceConfig:
     """Complete configuration for a single honeypot port."""
     port: int
     service_type: str  # "http", "https", "tcp"
-    protocol: str = "regex"  # "regex", "ssh", "smtp", "ftp", "telnet", "redis"
+    protocol: str = "regex"
+    transport: str = "tcp"  # "tcp" or "udp"
     rules: list[Rule] = field(default_factory=list)
     response_headers: ResponseHeaders | None = None
     default_response: str = ""
@@ -38,7 +39,13 @@ class ServiceConfig:
 
 
 VALID_SERVICE_TYPES = {"http", "https", "tcp"}
-VALID_PROTOCOLS = {"regex", "ssh", "smtp", "ftp", "telnet", "redis"}
+VALID_PROTOCOLS = {
+    "regex", "ssh", "smtp", "ftp", "telnet", "redis",
+    "dns", "snmp", "ssdp", "netbios_ns", "chargen", "memcached",
+    "smb", "mssql", "rdp",
+}
+VALID_TRANSPORTS = {"tcp", "udp"}
+UDP_PROTOCOLS = {"dns", "snmp", "ssdp", "netbios_ns", "chargen", "memcached"}
 
 
 def load_handler(path: Path) -> ServiceConfig:
@@ -54,16 +61,16 @@ def load_handler(path: Path) -> ServiceConfig:
         raise ValueError(f"{path}: missing [service] section")
 
     svc = data["service"]
-    for key in ("port", "type"):
-        if key not in svc:
-            raise ValueError(f"{path}: missing service.{key}")
+    if "port" not in svc:
+        raise ValueError(f"{path}: missing service.port")
 
     if not isinstance(svc["port"], int):
         raise ValueError(f"{path}: service.port must be an integer")
 
-    if svc["type"] not in VALID_SERVICE_TYPES:
+    service_type = svc.get("type", "tcp")
+    if service_type not in VALID_SERVICE_TYPES:
         raise ValueError(
-            f"{path}: invalid service.type '{svc['type']}', "
+            f"{path}: invalid service.type '{service_type}', "
             f"must be one of {VALID_SERVICE_TYPES}"
         )
 
@@ -72,6 +79,17 @@ def load_handler(path: Path) -> ServiceConfig:
         raise ValueError(
             f"{path}: invalid service.protocol '{protocol}', "
             f"must be one of {VALID_PROTOCOLS}"
+        )
+
+    transport = svc.get("transport", "udp" if protocol in UDP_PROTOCOLS else "tcp")
+    if transport not in VALID_TRANSPORTS:
+        raise ValueError(
+            f"{path}: invalid service.transport '{transport}', "
+            f"must be one of {VALID_TRANSPORTS}"
+        )
+    if protocol in UDP_PROTOCOLS and transport != "udp":
+        raise ValueError(
+            f"{path}: protocol '{protocol}' requires transport = \"udp\""
         )
 
     # Protocol-specific opts live in a top-level section named after the protocol.
@@ -112,8 +130,9 @@ def load_handler(path: Path) -> ServiceConfig:
 
     return ServiceConfig(
         port=svc["port"],
-        service_type=svc["type"],
+        service_type=service_type,
         protocol=protocol,
+        transport=transport,
         description=svc.get("description", ""),
         rules=rules,
         response_headers=headers,

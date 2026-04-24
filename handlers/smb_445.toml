@@ -1,0 +1,6 @@
+# SMB honeypot on TCP/445
+
+[service]
+port = 445
+protocol = "smb"
+description = "SMB1 Negotiate responder + raw-capture for post-negotiate probes"

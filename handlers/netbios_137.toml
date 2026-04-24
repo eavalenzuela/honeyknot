@@ -1,0 +1,6 @@
+# NetBIOS Name Service honeypot on UDP/137
+
+[service]
+port = 137
+protocol = "netbios_ns"
+description = "NetBIOS-NS query logger (silent)"

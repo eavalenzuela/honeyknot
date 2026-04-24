@@ -7,21 +7,44 @@ per-connection state via a `ConnectionContext`.
 """
 
 from honeyknot.config import ServiceConfig
-from honeyknot.protocols.base import ConnectionContext, ProtocolHandler
+from honeyknot.protocols.base import (
+    ConnectionContext,
+    DatagramContext,
+    ProtocolHandler,
+)
+from honeyknot.protocols.chargen import ChargenHandler
+from honeyknot.protocols.dns import DNSHandler
 from honeyknot.protocols.ftp import FTPHandler
+from honeyknot.protocols.memcached import MemcachedHandler
+from honeyknot.protocols.mssql import MSSQLHandler
+from honeyknot.protocols.netbios_ns import NetBIOSNSHandler
+from honeyknot.protocols.rdp import RDPHandler
 from honeyknot.protocols.redis import RedisHandler
 from honeyknot.protocols.regex import RegexHandler
+from honeyknot.protocols.smb import SMBHandler
 from honeyknot.protocols.smtp import SMTPHandler
+from honeyknot.protocols.snmp import SNMPHandler
+from honeyknot.protocols.ssdp import SSDPHandler
 from honeyknot.protocols.ssh import SSHHandler
 from honeyknot.protocols.telnet import TelnetHandler
 
 __all__ = [
+    "ChargenHandler",
     "ConnectionContext",
+    "DNSHandler",
+    "DatagramContext",
     "FTPHandler",
+    "MSSQLHandler",
+    "MemcachedHandler",
+    "NetBIOSNSHandler",
     "ProtocolHandler",
+    "RDPHandler",
     "RedisHandler",
     "RegexHandler",
+    "SMBHandler",
     "SMTPHandler",
+    "SNMPHandler",
+    "SSDPHandler",
     "SSHHandler",
     "TelnetHandler",
     "get_handler",
@@ -34,6 +57,15 @@ _REGISTRY: dict[str, type[ProtocolHandler]] = {
     "ftp": FTPHandler,
     "telnet": TelnetHandler,
     "redis": RedisHandler,
+    "dns": DNSHandler,
+    "snmp": SNMPHandler,
+    "ssdp": SSDPHandler,
+    "netbios_ns": NetBIOSNSHandler,
+    "chargen": ChargenHandler,
+    "memcached": MemcachedHandler,
+    "smb": SMBHandler,
+    "mssql": MSSQLHandler,
+    "rdp": RDPHandler,
 }
 
 

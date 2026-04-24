@@ -1,0 +1,9 @@
+# SSDP honeypot on UDP/1900
+
+[service]
+port = 1900
+protocol = "ssdp"
+description = "SSDP/UPnP M-SEARCH responder"
+
+[ssdp]
+server = "Linux/5.4 UPnP/1.1 MiniUPnPd/2.2.1"

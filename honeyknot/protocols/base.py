@@ -1,4 +1,4 @@
-"""Base protocol handler and per-connection context."""
+"""Base protocol handler and per-connection / per-datagram contexts."""
 
 import asyncio
 import logging
@@ -10,7 +10,7 @@ from honeyknot.config import ServiceConfig
 
 @dataclass
 class ConnectionContext:
-    """Per-connection state passed to a ProtocolHandler.
+    """Per-connection state passed to a TCP ProtocolHandler.
 
     The handler owns `state` (a free-form dict) for whatever session tracking
     it needs. `closed` is a flag the handler sets to request the server drop
@@ -34,6 +34,24 @@ class ConnectionContext:
     def close(self) -> None:
         """Mark this connection for shutdown after the current callback."""
         self.closed = True
+
+
+@dataclass
+class DatagramContext:
+    """Per-datagram context passed to a UDP ProtocolHandler.
+
+    UDP is stateless; there is no close and no persistent state dict. The
+    handler sends zero or more response datagrams via `send` and the server
+    handles capture around the callback.
+    """
+    transport: asyncio.DatagramTransport
+    addr: tuple
+    port: int
+    request_logger: logging.Logger
+
+    def send(self, data: bytes) -> None:
+        """Emit a response datagram back to the peer."""
+        self.transport.sendto(data, self.addr)
 
 
 class ProtocolHandler:
@@ -66,4 +84,8 @@ class ProtocolHandler:
 
     async def on_close(self, ctx: ConnectionContext) -> None:
         """Called once when the connection ends. Default: no-op."""
+        return None
+
+    async def on_datagram(self, data: bytes, ctx: DatagramContext) -> None:
+        """Called once per UDP datagram. Default: no-op."""
         return None

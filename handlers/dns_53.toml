@@ -1,0 +1,9 @@
+# DNS honeypot on UDP/53
+
+[service]
+port = 53
+protocol = "dns"
+description = "DNS honeypot — logs queries, answers A with canned IP"
+
+[dns]
+answer_a = "127.0.0.1"
