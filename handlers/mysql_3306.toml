@@ -1,0 +1,6 @@
+# MySQL honeypot on TCP/3306
+
+[service]
+port = 3306
+protocol = "mysql"
+description = "MySQL greeting + login capture + Access denied"

@@ -23,6 +23,7 @@ from honeyknot.protocols import (
     get_handler,
 )
 from honeyknot.ratelimit import RateLimiter
+from honeyknot.retention import sweep_raw
 from honeyknot.samples import SampleStore
 from honeyknot.yara_scan import YaraScanner
 
@@ -463,7 +464,8 @@ class HoneyknotDaemon:
                  run_as_group: str | None = None,
                  yara_rules: str | None = None,
                  pcap_enabled: bool = False,
-                 metrics_bind: str | None = None):
+                 metrics_bind: str | None = None,
+                 raw_dir_max_bytes: int = 0):
         self.bind_ip = bind_ip
         self.handler_dir = handler_dir
         self.log_dir = log_dir
@@ -479,6 +481,7 @@ class HoneyknotDaemon:
         self.yara_rules = yara_rules
         self.pcap_enabled = pcap_enabled
         self.metrics_bind = metrics_bind
+        self.raw_dir_max_bytes = raw_dir_max_bytes
 
     def start(self) -> None:
         asyncio.run(self._run())
@@ -557,11 +560,24 @@ class HoneyknotDaemon:
 
         reload_task = asyncio.create_task(_reload_loop())
 
+        retention_task: asyncio.Task | None = None
+        if self.raw_dir_max_bytes > 0:
+            retention_task = asyncio.create_task(sweep_raw(
+                Path(self.log_dir) / "raw",
+                self.raw_dir_max_bytes,
+                stop_event=stop_event,
+                events=events,
+            ))
+
         await stop_event.wait()
         reload_event.set()  # wake the reload loop so it exits
         reload_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reload_task
+        if retention_task is not None:
+            retention_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await retention_task
 
         for t in supervisors.values():
             t.cancel()

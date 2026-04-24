@@ -1,0 +1,6 @@
+# CoAP honeypot on UDP/5683
+
+[service]
+port = 5683
+protocol = "coap"
+description = "CoAP GET /.well-known/core etc. logger"

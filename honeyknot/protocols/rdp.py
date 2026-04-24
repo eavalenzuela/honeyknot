@@ -17,6 +17,7 @@ import logging
 import struct
 
 from honeyknot.protocols.base import ConnectionContext, ProtocolHandler
+from honeyknot.tls_parse import extract_sni
 
 logger = logging.getLogger("honeyknot.protocols.rdp")
 
@@ -41,9 +42,13 @@ class RDPHandler(ProtocolHandler):
             return
 
         # After confirming, the next chunk is the TLS ClientHello or similar.
-        # We've captured it; drop to free the slot.
+        # Try to pull SNI out of it before dropping.
         logger.info("RDP post-confirm data from %s: %d bytes",
                     ctx.addr, len(data))
+        sni = extract_sni(data)
+        if sni is not None:
+            logger.info("RDP TLS SNI from %s: %r", ctx.addr, sni)
+            ctx.event("tls_sni", source="rdp", sni=sni)
         ctx.close()
 
 

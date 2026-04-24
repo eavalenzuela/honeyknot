@@ -1,0 +1,6 @@
+# Postgres honeypot on TCP/5432
+
+[service]
+port = 5432
+protocol = "postgres"
+description = "Postgres startup + cleartext password capture"

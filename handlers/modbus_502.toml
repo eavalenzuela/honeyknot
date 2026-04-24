@@ -1,0 +1,6 @@
+# Modbus honeypot on TCP/502
+
+[service]
+port = 502
+protocol = "modbus"
+description = "Modbus TCP PLC mimic"

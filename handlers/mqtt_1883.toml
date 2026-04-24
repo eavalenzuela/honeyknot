@@ -1,0 +1,6 @@
+# MQTT honeypot on TCP/1883
+
+[service]
+port = 1883
+protocol = "mqtt"
+description = "MQTT broker mimic — captures client_id/user/pass"

@@ -71,6 +71,11 @@ def main():
         "--metrics-bind", dest="metrics_bind", default=None,
         help="expose Prometheus metrics at host:port (e.g. 127.0.0.1:9099)",
     )
+    parser.add_argument(
+        "--raw-dir-max-bytes", dest="raw_dir_max_bytes", type=int, default=0,
+        help="total byte cap for logs/raw/; oldest files deleted when "
+             "exceeded. 0 (default) disables sweeping.",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_dir, verbose=args.verbose)
@@ -89,6 +94,7 @@ def main():
         yara_rules=args.yara_rules,
         pcap_enabled=args.pcap_enabled,
         metrics_bind=args.metrics_bind,
+        raw_dir_max_bytes=args.raw_dir_max_bytes,
     )
     daemon.start()
 

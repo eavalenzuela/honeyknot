@@ -24,12 +24,26 @@ logger = logging.getLogger("honeyknot.protocols.http")
 MAX_HEADER_BYTES = 64 * 1024  # reject oversized header blocks
 MAX_BODY_BYTES = 10 * 1024 * 1024
 HEADER_TERM = b"\r\n\r\n"
+H2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 
 
 class HTTPHandler(ProtocolHandler):
     async def on_data(self, data: bytes, ctx: ConnectionContext) -> None:
         ctx.state.setdefault("buffer", bytearray())
         ctx.state["buffer"].extend(data)
+
+        # Distinct signal for h2 scanners — the HTTP/2 preface is not a
+        # valid HTTP/1.1 request, and letting it fall through to 400 hides
+        # a useful attribution.
+        buf = bytes(ctx.state["buffer"])
+        if buf.startswith(H2_PREFACE[:min(len(buf), len(H2_PREFACE))]) \
+                and len(buf) >= len(H2_PREFACE):
+            logger.info("HTTP/2 preface from %s", ctx.addr)
+            ctx.event("h2_preface")
+            await ctx.send(b"HTTP/1.1 505 HTTP Version Not Supported\r\n"
+                           b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+            ctx.close()
+            return
 
         while not ctx.closed:
             result = _try_parse(ctx.state["buffer"])

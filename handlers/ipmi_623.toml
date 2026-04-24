@@ -1,0 +1,6 @@
+# IPMI honeypot on UDP/623
+
+[service]
+port = 623
+protocol = "ipmi"
+description = "RMCP Presence Ping responder"

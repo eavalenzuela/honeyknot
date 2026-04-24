@@ -43,9 +43,12 @@ VALID_PROTOCOLS = {
     "regex", "ssh", "smtp", "ftp", "telnet", "redis", "vnc", "http",
     "dns", "snmp", "ssdp", "netbios_ns", "chargen", "memcached",
     "smb", "mssql", "rdp",
+    "sip", "ipmi", "coap",
+    "modbus", "mqtt", "mysql", "postgres",
 }
 VALID_TRANSPORTS = {"tcp", "udp"}
-UDP_PROTOCOLS = {"dns", "snmp", "ssdp", "netbios_ns", "chargen", "memcached"}
+UDP_PROTOCOLS = {"dns", "snmp", "ssdp", "netbios_ns", "chargen", "memcached",
+                 "sip", "ipmi", "coap"}
 
 
 def load_handler(path: Path) -> ServiceConfig:

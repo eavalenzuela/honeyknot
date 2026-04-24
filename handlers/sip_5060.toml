@@ -1,0 +1,6 @@
+# SIP honeypot on UDP/5060
+
+[service]
+port = 5060
+protocol = "sip"
+description = "SIP probe logger + 401 nonce challenger"

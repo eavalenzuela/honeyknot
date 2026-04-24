@@ -13,15 +13,22 @@ from honeyknot.protocols.base import (
     ProtocolHandler,
 )
 from honeyknot.protocols.chargen import ChargenHandler
+from honeyknot.protocols.coap import CoAPHandler
 from honeyknot.protocols.dns import DNSHandler
 from honeyknot.protocols.ftp import FTPHandler
 from honeyknot.protocols.http import HTTPHandler
+from honeyknot.protocols.ipmi import IPMIHandler
 from honeyknot.protocols.memcached import MemcachedHandler
+from honeyknot.protocols.modbus import ModbusHandler
+from honeyknot.protocols.mqtt import MQTTHandler
 from honeyknot.protocols.mssql import MSSQLHandler
+from honeyknot.protocols.mysql import MySQLHandler
 from honeyknot.protocols.netbios_ns import NetBIOSNSHandler
+from honeyknot.protocols.postgres import PostgresHandler
 from honeyknot.protocols.rdp import RDPHandler
 from honeyknot.protocols.redis import RedisHandler
 from honeyknot.protocols.regex import RegexHandler
+from honeyknot.protocols.sip import SIPHandler
 from honeyknot.protocols.smb import SMBHandler
 from honeyknot.protocols.smtp import SMTPHandler
 from honeyknot.protocols.snmp import SNMPHandler
@@ -32,18 +39,25 @@ from honeyknot.protocols.vnc import VNCHandler
 
 __all__ = [
     "ChargenHandler",
+    "CoAPHandler",
     "ConnectionContext",
     "DNSHandler",
     "DatagramContext",
     "FTPHandler",
     "HTTPHandler",
+    "IPMIHandler",
+    "MQTTHandler",
     "MSSQLHandler",
     "MemcachedHandler",
+    "ModbusHandler",
+    "MySQLHandler",
     "NetBIOSNSHandler",
+    "PostgresHandler",
     "ProtocolHandler",
     "RDPHandler",
     "RedisHandler",
     "RegexHandler",
+    "SIPHandler",
     "SMBHandler",
     "SMTPHandler",
     "SNMPHandler",
@@ -72,6 +86,13 @@ _REGISTRY: dict[str, type[ProtocolHandler]] = {
     "smb": SMBHandler,
     "mssql": MSSQLHandler,
     "rdp": RDPHandler,
+    "sip": SIPHandler,
+    "ipmi": IPMIHandler,
+    "coap": CoAPHandler,
+    "modbus": ModbusHandler,
+    "mqtt": MQTTHandler,
+    "mysql": MySQLHandler,
+    "postgres": PostgresHandler,
 }
 
 

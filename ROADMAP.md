@@ -5,9 +5,10 @@ group. See `REWORK.md` for the historical phase plan that got us here.
 
 ## Status as of this file
 
-- 17 protocol handlers: regex + 6 stateful TCP (ssh, smtp, ftp, telnet,
-  redis, vnc) + 3 binary TCP (smb, mssql, rdp) + 6 UDP
-  (dns, snmp, ssdp, netbios_ns, chargen, memcached) + proper http
+- 24 protocol handlers: regex + 10 stateful TCP (ssh, smtp, ftp, telnet,
+  redis, vnc, http, mqtt, mysql, postgres) + 4 binary TCP (smb, mssql,
+  rdp, modbus) + 9 UDP (dns, snmp, ssdp, netbios_ns, chargen, memcached,
+  sip, ipmi, coap)
 - Single asyncio event loop, one process
 - Raw per-session captures, content-addressed sample store (SHA-256) with
   `.meta.json` sidecars, JSONL event log with size-based rotation, IOC
@@ -21,8 +22,13 @@ group. See `REWORK.md` for the historical phase plan that got us here.
 - Per-session PCAP-ng capture via `--pcap` with synthesized IPv4+TCP framing
 - Prometheus `/metrics` endpoint via `--metrics-bind`
 - SIGHUP reload of handler TOMLs with diff reconciliation
+- Raw-dir retention sweeper via `--raw-dir-max-bytes`
+- TLS SNI extraction from RDP post-confirm captures → `tls_sni` event
+- HTTP/2 preface detection → `h2_preface` event (+ 505 reply)
+- `contrib/Dockerfile` (multi-stage, non-root) and
+  `contrib/honeyknot.service` systemd unit with hardening
 - GitHub Actions CI (ruff + pytest on 3.11/3.12/3.13)
-- 157 tests passing, ruff clean
+- 182 tests passing, ruff clean
 
 ## Capture quality & analysis
 
@@ -37,26 +43,36 @@ group. See `REWORK.md` for the historical phase plan that got us here.
 - [x] **PCAP-ng export.** `--pcap` enables per-session `.pcapng` files in
       `logs/pcap/` with synthesized Ethernet+IPv4+TCP framing so Wireshark
       "Follow TCP Stream" works out of the box.
-- [ ] **Raw-dir retention / sweeper.** `logs/raw/` grows unboundedly. Need
-      either a size-based sweeper task or documented external cron. Low
-      urgency now that `samples/` carries the unique content — raw exists
-      only for session ordering.
+- [x] **Raw-dir retention / sweeper.** `--raw-dir-max-bytes` enables a
+      background task that prunes oldest files by mtime when the cap is
+      exceeded. Emits `retention_sweep` events.
 - [x] **Sample metadata sidecar.** `logs/samples/<xx>/<sha>.meta.json` now
       tracks `first_seen`, `last_seen`, `hit_count`, `size`, distinct
       `peers` (capped at 50), and aggregated `iocs`.
 
 ## Missing high-value protocols
 
-- [ ] **SIP (UDP/5060)** — VoIP reconnaissance is constant traffic.
-- [ ] **IPMI (UDP/623)** — credential spray target with known CVEs.
-- [ ] **Modbus (TCP/502)** + **S7 (TCP/102)** + **BACnet (UDP/47808)** — ICS
-      recon; high-signal attackers if any show up at all.
-- [ ] **CoAP (UDP/5683)** and **MQTT (TCP/1883, 8883)** — IoT botnet recon.
+- [x] **SIP (UDP/5060)** — OPTIONS/REGISTER/INVITE parser; 401-nonce
+      challenge invites digest credential submission.
+- [x] **IPMI (UDP/623)** — ASF-RMCP Presence Pong responder.
+- [x] **Modbus (TCP/502)** — MBAP framing + Read Coils / Read Registers
+      / Read Device ID.
+- [ ] **S7 (TCP/102)** + **BACnet (UDP/47808)** — ICS recon; add when
+      there is demonstrated traffic on a deployed instance.
+- [x] **CoAP (UDP/5683)** — parser + 2.05 Content ack.
+- [x] **MQTT (TCP/1883)** — CONNECT parser that captures
+      client_id/user/pass; CONNACK + SUBACK + PINGRESP.
+- [ ] **MQTT over TLS (TCP/8883)** — add once broader TLS composition
+      testing is in place.
 - [ ] **WS-Discovery (UDP/3702)** — SOAP-over-UDP amplification target;
       Shodan-visible.
+- [x] **MySQL (TCP/3306)** — server-first greeting; login capture;
+      Access denied.
+- [x] **Postgres (TCP/5432)** — SSLRequest + StartupMessage + cleartext
+      password capture.
 - [ ] **Telnet over TLS (TCP/992)**, **DNS-over-TLS (TCP/853)**,
-      **MySQL (TCP/3306)**, **Postgres (TCP/5432)**, **IMAP (TCP/143/993)**,
-      **POP3 (TCP/110/995)** — all regularly probed, none implemented.
+      **IMAP (TCP/143/993)**, **POP3 (TCP/110/995)** — regularly probed;
+      not yet implemented.
 - [x] **HTTPS coverage for the new HTTP handler.** Verified live with a
       self-signed cert: TLS terminates, Content-Length body is consumed
       in full, rules match.
@@ -70,11 +86,12 @@ group. See `REWORK.md` for the historical phase plan that got us here.
       a stdlib asyncio HTTP server serving `/metrics`. Counts events
       broken down by `(event, port, protocol, transport)`, plus a
       `honeyknot_unique_samples` gauge from the sample store.
-- [ ] **`systemd` unit file** under `contrib/` with
-      `CapabilityBoundingSet=CAP_NET_BIND_SERVICE`, `NoNewPrivileges=yes`,
-      `ProtectSystem=strict`, `PrivateTmp=yes`. Pairs with privilege drop.
-- [ ] **Dockerfile** (multi-stage, distroless final) + `docker-compose.yml`
-      demoing handler volume mount and log-volume persistence.
+- [x] **`systemd` unit file** at `contrib/honeyknot.service` with
+      `CapabilityBoundingSet=CAP_NET_BIND_SERVICE`, `AmbientCapabilities`,
+      `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, restricted
+      syscall filter.
+- [x] **Dockerfile** at `contrib/Dockerfile` (python:3.13-slim, non-root).
+      `docker-compose.yml` still TODO.
 - [x] **Handler supervision with auto-restart.** Supervisor task per port
       backs off (1s → 32s capped) and re-binds on crash. Emits
       `port_down` on failure and `port_up` on successful rebind.
@@ -98,13 +115,10 @@ group. See `REWORK.md` for the historical phase plan that got us here.
       `asyncio.start_server` + `asyncio.open_connection` to catch
       wire-format regressions (we caught two of those only via live
       smoke scripts).
-- [ ] **HTTP handler: HTTP/2 rejection.** If a client opens with an
-      HTTP/2 preface (`PRI * HTTP/2.0...`), we return 400 — that's
-      correct, but we should log it as a distinct `h2_preface` event
-      so ops can see h2 scanners landing.
-- [ ] **RDP: post-confirm captured bytes contain a TLS ClientHello we
-      parse nothing from.** Quick win: parse SNI out of the ClientHello
-      and emit it as a `tls_sni` event for fingerprinting.
+- [x] **HTTP handler: HTTP/2 rejection.** Explicit `h2_preface` event
+      emitted and 505 returned when the preface is observed.
+- [x] **RDP: post-confirm TLS ClientHello SNI parsing.** `tls_sni` event
+      with the hostname from the server_name extension.
 
 ## Small polish / debt
 

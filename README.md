@@ -41,6 +41,7 @@ run_from_interactive_shell("0.0.0.0")
 | `--yara-rules` | *none* | path to a `.yar` file or directory of rules (requires `yara-python`) |
 | `--pcap` | off | write per-session PCAP-ng files to `logs/pcap/` |
 | `--metrics-bind` | *none* | expose Prometheus metrics at `host:port`, e.g. `127.0.0.1:9099` |
+| `--raw-dir-max-bytes` | 0 (off) | cap total size of `logs/raw/`; oldest files pruned when exceeded |
 | `-tc` / `--thread-count` | 5 | accepted for back-compat; ignored under asyncio |
 
 Signals:
@@ -154,12 +155,16 @@ response = '<?php system($_REQUEST["cmd"]); ?>'
 - `telnet` — IAC negotiation, fake login prompt, fake shell
 - `redis` — RESP parser with pipelining, permissive acks
 - `vnc` — RFB 3.8 handshake, captures 16-byte auth response then fails
-- `http` — full request parser: headers + Content-Length or chunked body, pipelining, `Connection: close`
+- `http` — full request parser; headers + Content-Length or chunked body, pipelining, `Connection: close`, `h2_preface` event for HTTP/2 scanners
+- `mqtt` — CONNECT parser; captures `client_id`/`username`/`password`; CONNACK + PINGRESP + SUBACK
+- `mysql` — protocol-10 greeting; parses HandshakeResponse, captures user + auth response bytes; Access denied
+- `postgres` — handles SSLRequest + StartupMessage, captures user/db; AuthenticationCleartextPassword; captures password; ErrorResponse
 
 **TCP, binary fingerprinting:**
 - `smb` — SMB1 Negotiate response, captures post-negotiate probes
 - `mssql` — TDS Pre-Login + captures LOGIN7 + error token
-- `rdp` — X.224 Connection Confirm selecting TLS, captures ClientHello
+- `rdp` — X.224 Connection Confirm selecting TLS, captures ClientHello + emits `tls_sni` event
+- `modbus` — MBAP framing parser, responds to Read Coils / Read Registers / Read Device Identification
 
 **UDP:**
 - `dns` — parses query, returns canned A record
@@ -168,6 +173,9 @@ response = '<?php system($_REQUEST["cmd"]); ?>'
 - `netbios_ns` — decodes first-level-encoded name, silent
 - `chargen` — short fixed reply, refuses amplification
 - `memcached` — silent (amplification defense)
+- `sip` — OPTIONS 200 / REGISTER 401-nonce to invite Authorization Digest follow-up
+- `ipmi` — ASF-RMCP Presence Pong
+- `coap` — parses header + Uri-Path; returns 2.05 Content ack
 
 **Fallback:**
 - `regex` — back-compat one-shot client-speaks-first matcher; the default
@@ -183,8 +191,13 @@ pytest -q
 pytest tests/test_protocols_vnc_http.py::TestHTTP::test_chunked_body_decoded
 ```
 
+## Deployment
+
+See `contrib/` for a `Dockerfile` (python:3.13-slim, non-root,
+`CAP_NET_BIND_SERVICE`) and a hardened `honeyknot.service` systemd unit
+(`NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, restricted
+syscall filter). `systemctl reload honeyknot` triggers a SIGHUP reload.
+
 ## Roadmap
 
-See [`ROADMAP.md`](ROADMAP.md) for planned work: rate limiting, privilege
-drop, PCAP export, metrics endpoint, more protocol handlers (SIP, IPMI,
-Modbus, CoAP, MQTT, WS-Discovery), YARA/IOC-pivot improvements, and more.
+See [`ROADMAP.md`](ROADMAP.md) for remaining planned work.
