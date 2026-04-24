@@ -48,10 +48,12 @@ class EventSink:
 
     def __init__(self, log_dir: str | Path,
                  max_bytes: int = DEFAULT_MAX_BYTES,
-                 backup_count: int = DEFAULT_BACKUP_COUNT):
+                 backup_count: int = DEFAULT_BACKUP_COUNT,
+                 metrics=None):
         self.path = Path(log_dir) / "events.jsonl"
         self.max_bytes = max_bytes
         self.backup_count = backup_count
+        self.metrics = metrics  # MetricsRegistry or None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._fp = self._open()
@@ -99,6 +101,10 @@ class EventSink:
     def emit(self, event: str, *, transport: str, port: int,
              protocol: str, peer: tuple | None = None,
              **extra: Any) -> None:
+        if self.metrics is not None:
+            self.metrics.record_event(
+                event, port=port, protocol=protocol, transport=transport,
+            )
         if self._fp is None:
             return
         record: dict[str, Any] = {

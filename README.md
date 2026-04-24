@@ -38,7 +38,16 @@ run_from_interactive_shell("0.0.0.0")
 | `--rate-limit-refill` | 5 | per-IP token refill rate (tokens/sec) |
 | `--run-as-user` | *none* | drop to this user after binding (root only) |
 | `--run-as-group` | *none* | drop to this group after binding (root only) |
+| `--yara-rules` | *none* | path to a `.yar` file or directory of rules (requires `yara-python`) |
+| `--pcap` | off | write per-session PCAP-ng files to `logs/pcap/` |
+| `--metrics-bind` | *none* | expose Prometheus metrics at `host:port`, e.g. `127.0.0.1:9099` |
 | `-tc` / `--thread-count` | 5 | accepted for back-compat; ignored under asyncio |
+
+Signals:
+- `SIGINT` / `SIGTERM` — graceful shutdown.
+- `SIGHUP` — reload handler TOMLs in place. Unchanged listeners keep running;
+  changed ones are stopped and restarted; added/removed ports are
+  correspondingly bound/closed. A `config_reload` event records the diff.
 
 Binding to ports <1024 requires root. Use `--run-as-user`/`--run-as-group`
 to drop privileges immediately after binding — the daemon will call

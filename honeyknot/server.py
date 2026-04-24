@@ -14,6 +14,8 @@ from honeyknot.config import ServiceConfig, load_all_handlers
 from honeyknot.events import EventSink
 from honeyknot.ioc import extract_iocs
 from honeyknot.logger import get_port_logger
+from honeyknot.metrics import MetricsRegistry, serve_metrics
+from honeyknot.pcap import PcapngWriter
 from honeyknot.protocols import (
     ConnectionContext,
     DatagramContext,
@@ -22,6 +24,7 @@ from honeyknot.protocols import (
 )
 from honeyknot.ratelimit import RateLimiter
 from honeyknot.samples import SampleStore
+from honeyknot.yara_scan import YaraScanner
 
 logger = logging.getLogger("honeyknot.server")
 
@@ -39,7 +42,9 @@ class PortServer:
                  max_capture_bytes: int = DEFAULT_MAX_CAPTURE_BYTES,
                  events: EventSink | None = None,
                  samples: SampleStore | None = None,
-                 rate_limiter: RateLimiter | None = None):
+                 rate_limiter: RateLimiter | None = None,
+                 yara_scanner: YaraScanner | None = None,
+                 pcap_enabled: bool = False):
         self.config = config
         self.bind_ip = bind_ip
         self.log_dir = Path(log_dir)
@@ -47,6 +52,8 @@ class PortServer:
         self.events = events
         self.samples = samples
         self.rate_limiter = rate_limiter
+        self.yara_scanner = yara_scanner
+        self.pcap_enabled = pcap_enabled
         self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
         self.request_logger = get_port_logger(config.port, log_dir)
         self.handler: ProtocolHandler = get_handler(config)
@@ -126,6 +133,7 @@ class PortServer:
 
         capture_path, capture_file = self._open_capture(peer)
         captured = bytearray()
+        pcap_writer = self._open_pcap(peer) if self.pcap_enabled else None
 
         def _emit_protocol(name: str, **fields) -> None:
             if self.events is not None:
@@ -145,6 +153,7 @@ class PortServer:
             port=self.config.port,
             request_logger=self.request_logger,
             raw_capture=capture_file,
+            pcap_writer=pcap_writer,
             emit_event=_emit_protocol,
         )
 
@@ -167,6 +176,8 @@ class PortServer:
                     if capture_file is not None:
                         capture_file.write(data[:remaining])
                     captured.extend(data[:remaining])
+                    if pcap_writer is not None:
+                        pcap_writer.write_inbound(data[:remaining])
                 total += len(data)
 
                 await self.handler.on_data(data, ctx)
@@ -181,6 +192,8 @@ class PortServer:
         finally:
             if capture_file is not None:
                 capture_file.close()
+            if pcap_writer is not None:
+                pcap_writer.close()
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -188,6 +201,18 @@ class PortServer:
                 pass
             digest = self._finalize_capture(bytes(captured), peer)
             self._emit("close", peer, bytes_in=total, sha256=digest)
+
+    def _open_pcap(self, peer: tuple):
+        pcap_dir = self.log_dir / "pcap"
+        pcap_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        host = peer[0] if peer else "unknown"
+        safe_host = host.replace(":", "_").replace("/", "_")
+        path = pcap_dir / f"{ts}_{safe_host}_{self.config.port}.pcapng"
+        writer = PcapngWriter(path, peer, self.bind_ip, self.config.port)
+        if not writer.open:
+            return None
+        return writer
 
     def _open_capture(self, peer: tuple):
         ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -240,10 +265,20 @@ class PortServer:
                 sha256=digest, bytes=len(data),
             )
 
+        yara_matches = []
+        if self.yara_scanner is not None and self.yara_scanner.enabled:
+            yara_matches = self.yara_scanner.scan(data)
+            if yara_matches and self.events is not None:
+                self.events.emit(
+                    "yara_match", transport="tcp", port=self.config.port,
+                    protocol=self.config.protocol, peer=peer,
+                    sha256=digest, matches=yara_matches,
+                )
+
         if self.samples is not None and digest is not None and _path is not None:
             self.samples.update_meta(
                 digest, size=len(data), peer=peer,
-                iocs=iocs, analyzer=result,
+                iocs=iocs, analyzer=result, yara=yara_matches,
             )
 
         return digest
@@ -302,13 +337,15 @@ class UdpPortServer:
     def __init__(self, config: ServiceConfig, bind_ip: str, log_dir: str,
                  events: EventSink | None = None,
                  samples: SampleStore | None = None,
-                 rate_limiter: RateLimiter | None = None):
+                 rate_limiter: RateLimiter | None = None,
+                 yara_scanner: YaraScanner | None = None):
         self.config = config
         self.bind_ip = bind_ip
         self.log_dir = Path(log_dir)
         self.events = events
         self.samples = samples
         self.rate_limiter = rate_limiter
+        self.yara_scanner = yara_scanner
         self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
         self.request_logger = get_port_logger(config.port, log_dir)
         self.handler: ProtocolHandler = get_handler(config)
@@ -393,10 +430,20 @@ class UdpPortServer:
                 sha256=digest, bytes=len(data),
             )
 
+        yara_matches = []
+        if self.yara_scanner is not None and self.yara_scanner.enabled:
+            yara_matches = self.yara_scanner.scan(data)
+            if yara_matches and self.events is not None:
+                self.events.emit(
+                    "yara_match", transport="udp", port=self.config.port,
+                    protocol=self.config.protocol, peer=peer,
+                    sha256=digest, matches=yara_matches,
+                )
+
         if self.samples is not None and digest is not None and _path is not None:
             self.samples.update_meta(
                 digest, size=len(data), peer=peer,
-                iocs=iocs, analyzer=result,
+                iocs=iocs, analyzer=result, yara=yara_matches,
             )
 
         return digest
@@ -413,7 +460,10 @@ class HoneyknotDaemon:
                  rate_limit_capacity: float = 20.0,
                  rate_limit_refill_per_sec: float = 5.0,
                  run_as_user: str | None = None,
-                 run_as_group: str | None = None):
+                 run_as_group: str | None = None,
+                 yara_rules: str | None = None,
+                 pcap_enabled: bool = False,
+                 metrics_bind: str | None = None):
         self.bind_ip = bind_ip
         self.handler_dir = handler_dir
         self.log_dir = log_dir
@@ -426,6 +476,9 @@ class HoneyknotDaemon:
         self.rate_limit_refill_per_sec = rate_limit_refill_per_sec
         self.run_as_user = run_as_user
         self.run_as_group = run_as_group
+        self.yara_rules = yara_rules
+        self.pcap_enabled = pcap_enabled
+        self.metrics_bind = metrics_bind
 
     def start(self) -> None:
         asyncio.run(self._run())
@@ -439,36 +492,41 @@ class HoneyknotDaemon:
             event_kwargs["max_bytes"] = self.event_log_max_bytes
         if self.event_log_backups is not None:
             event_kwargs["backup_count"] = self.event_log_backups
-        events = EventSink(self.log_dir, **event_kwargs)
+        metrics = MetricsRegistry()
+        metrics.samples_path = Path(self.log_dir) / "samples"
+        events = EventSink(self.log_dir, metrics=metrics, **event_kwargs)
         samples = SampleStore(self.log_dir)
         limiter = RateLimiter(
             capacity=self.rate_limit_capacity,
             refill_per_sec=self.rate_limit_refill_per_sec,
         )
+        yara_scanner = YaraScanner(self.yara_rules)
 
-        servers: list = []
+        # Keyed by port for hot-reload comparison.
+        servers: dict[int, PortServer | UdpPortServer] = {}
         for cfg in configs:
-            if cfg.transport == "udp":
-                servers.append(UdpPortServer(
-                    cfg, self.bind_ip, self.log_dir, events, samples, limiter,
-                ))
-            else:
-                servers.append(PortServer(
-                    cfg, self.bind_ip, self.log_dir,
-                    self.max_capture_bytes, events, samples, limiter,
-                ))
+            servers[cfg.port] = self._build_server(
+                cfg, events, samples, limiter, yara_scanner,
+            )
 
-        await asyncio.gather(*(s.start() for s in servers))
+        await asyncio.gather(*(s.start() for s in servers.values()))
+
+        metrics_server = await serve_metrics(metrics, self.metrics_bind or "")
 
         # Drop privileges *after* binding, *before* accepting connections.
         self._drop_privileges()
 
         stop_event = asyncio.Event()
+        reload_event = asyncio.Event()
         loop = asyncio.get_running_loop()
 
         def _request_stop(sig: signal.Signals) -> None:
             logger.info("Received %s, shutting down...", sig.name)
             stop_event.set()
+
+        def _request_reload() -> None:
+            logger.info("Received SIGHUP, scheduling handler reload")
+            reload_event.set()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -477,21 +535,120 @@ class HoneyknotDaemon:
                 # Windows fallback; not our primary target but harmless.
                 signal.signal(sig, lambda s, f: stop_event.set())
 
-        serve_tasks = [asyncio.create_task(s.serve()) for s in servers]
-        for task, server in zip(serve_tasks, servers, strict=True):
-            task.add_done_callback(
-                lambda t, srv=server, ev=events: _on_serve_done(t, srv, ev),
-            )
+        with contextlib.suppress(AttributeError, NotImplementedError,
+                                 ValueError):
+            loop.add_signal_handler(signal.SIGHUP, _request_reload)
+
+        supervisors: dict[int, asyncio.Task] = {
+            port: asyncio.create_task(_supervise(s, events, stop_event))
+            for port, s in servers.items()
+        }
+
+        async def _reload_loop():
+            while not stop_event.is_set():
+                await reload_event.wait()
+                if stop_event.is_set():
+                    return
+                reload_event.clear()
+                await self._reload_handlers(
+                    servers, supervisors, events, samples, limiter,
+                    yara_scanner, stop_event,
+                )
+
+        reload_task = asyncio.create_task(_reload_loop())
 
         await stop_event.wait()
+        reload_event.set()  # wake the reload loop so it exits
+        reload_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reload_task
 
-        for t in serve_tasks:
+        for t in supervisors.values():
             t.cancel()
-        await asyncio.gather(*(s.stop() for s in servers), return_exceptions=True)
-        await asyncio.gather(*serve_tasks, return_exceptions=True)
+        await asyncio.gather(*(s.stop() for s in servers.values()),
+                             return_exceptions=True)
+        await asyncio.gather(*supervisors.values(), return_exceptions=True)
+
+        if metrics_server is not None:
+            metrics_server.close()
+            await metrics_server.wait_closed()
 
         events.close()
         logger.info("Honeyknot shut down")
+
+    def _build_server(self, cfg, events, samples, limiter, yara_scanner):
+        if cfg.transport == "udp":
+            return UdpPortServer(
+                cfg, self.bind_ip, self.log_dir, events, samples,
+                limiter, yara_scanner,
+            )
+        return PortServer(
+            cfg, self.bind_ip, self.log_dir,
+            self.max_capture_bytes, events, samples,
+            limiter, yara_scanner, pcap_enabled=self.pcap_enabled,
+        )
+
+    async def _reload_handlers(self, servers, supervisors, events, samples,
+                               limiter, yara_scanner, stop_event):
+        """Diff the handler directory against the live set and reconcile.
+
+        Changed configs and removed ports stop; new ports start. Unchanged
+        configs (same TOML content) are left running so their rate-limit
+        buckets and in-flight connections survive the reload.
+        """
+        try:
+            new_configs = load_all_handlers(self.handler_dir)
+        except (FileNotFoundError, ValueError) as e:
+            logger.error("reload failed: %s", e)
+            if events is not None:
+                events.emit("config_reload", transport="-", port=0,
+                            protocol="-", error=repr(e))
+            return
+
+        new_by_port = {cfg.port: cfg for cfg in new_configs}
+        added: list[int] = []
+        removed: list[int] = []
+        changed: list[int] = []
+
+        for port in list(servers.keys()):
+            if port not in new_by_port:
+                removed.append(port)
+                continue
+            if _config_signature(new_by_port[port]) != \
+                    _config_signature(servers[port].config):
+                changed.append(port)
+
+        for port in new_by_port:
+            if port not in servers:
+                added.append(port)
+
+        # Stop removed + changed listeners.
+        for port in removed + changed:
+            supervisors[port].cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await supervisors[port]
+            with contextlib.suppress(Exception):
+                await servers[port].stop()
+            supervisors.pop(port, None)
+            servers.pop(port, None)
+
+        # Start new and changed listeners.
+        for port in added + changed:
+            cfg = new_by_port[port]
+            srv = self._build_server(cfg, events, samples, limiter, yara_scanner)
+            await srv.start()
+            servers[port] = srv
+            supervisors[port] = asyncio.create_task(
+                _supervise(srv, events, stop_event),
+            )
+
+        logger.info("Config reload: +%d / -%d / ~%d",
+                    len(added), len(removed), len(changed))
+        if events is not None:
+            events.emit(
+                "config_reload", transport="-", port=0, protocol="-",
+                added=added, removed=removed, changed=changed,
+            )
 
     def _drop_privileges(self) -> None:
         """Switch to an unprivileged user after sockets are bound.
@@ -534,22 +691,78 @@ class HoneyknotDaemon:
         logger.info("Dropped privileges to uid=%s gid=%s", uid, effective_gid)
 
 
-def _on_serve_done(task: asyncio.Task, server, events: EventSink | None) -> None:
-    """Called when a serve task exits. Cancellation is normal; anything
-    else (including an unhandled exception from asyncio internals) is a
-    port-down signal we want on the record."""
-    if task.cancelled():
-        return
-    exc = task.exception()
-    port = server.config.port
-    if exc is None:
-        # Server.serve_forever returning without cancellation means the
-        # server was stopped cleanly — also normal.
-        return
-    logger.error("Port %d serve task crashed: %s", port, exc)
-    if events is not None:
-        events.emit(
-            "port_down", transport=server.config.transport,
-            port=port, protocol=server.config.protocol,
-            error=repr(exc),
-        )
+def _config_signature(cfg) -> tuple:
+    """Stable, hashable snapshot of a ServiceConfig for change detection.
+
+    Compiled regex objects don't compare well; use the original patterns.
+    """
+    return (
+        cfg.port, cfg.service_type, cfg.protocol, cfg.transport,
+        cfg.encoding, cfg.default_response, cfg.description,
+        cfg.tls_certfile, cfg.tls_keyfile,
+        tuple((r.name, r.pattern.pattern, r.response) for r in cfg.rules),
+        None if cfg.response_headers is None else (
+            cfg.response_headers.status_line,
+            tuple(cfg.response_headers.headers),
+        ),
+        tuple(sorted(cfg.protocol_opts.items())),
+    )
+
+
+async def _supervise(server, events: EventSink | None,
+                     stop_event: asyncio.Event) -> None:
+    """Keep a port's serve task alive across unexpected failures.
+
+    On crash we emit `port_down` with the error string, back off (capped
+    exponential, 1s → 32s), and re-bind via `server.start()` + resume
+    serving. On successful rebind we emit `port_up`. On shutdown
+    (stop_event set) we just return.
+
+    Cancellation from the daemon is respected — if we're cancelled while
+    backing off or rebinding, we exit cleanly.
+    """
+    backoff = 1.0
+    while not stop_event.is_set():
+        serve_task = asyncio.create_task(server.serve())
+        try:
+            await serve_task
+            # Clean return (e.g. stop() called). Exit.
+            return
+        except asyncio.CancelledError:
+            serve_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await serve_task
+            return
+        except Exception as exc:
+            logger.error("Port %d serve task crashed: %s",
+                         server.config.port, exc)
+            if events is not None:
+                events.emit(
+                    "port_down", transport=server.config.transport,
+                    port=server.config.port, protocol=server.config.protocol,
+                    error=repr(exc),
+                )
+
+        if stop_event.is_set():
+            return
+
+        # Back off before re-binding.
+        try:
+            await asyncio.sleep(backoff)
+        except asyncio.CancelledError:
+            return
+        backoff = min(backoff * 2, 32.0)
+
+        # Attempt to re-bind.
+        try:
+            await server.start()
+        except Exception as exc:
+            logger.error("Port %d rebind failed: %s",
+                         server.config.port, exc)
+            continue
+        if events is not None:
+            events.emit(
+                "port_up", transport=server.config.transport,
+                port=server.config.port, protocol=server.config.protocol,
+            )
+        backoff = 1.0  # reset on successful rebind

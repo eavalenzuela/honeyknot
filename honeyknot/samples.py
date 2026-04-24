@@ -66,7 +66,8 @@ class SampleStore:
     def update_meta(self, digest: str, *, size: int,
                     peer: tuple | None = None,
                     iocs: dict | None = None,
-                    analyzer: dict | None = None) -> None:
+                    analyzer: dict | None = None,
+                    yara: list | None = None) -> None:
         """Merge a new hit's metadata into `<sha>.meta.json`.
 
         Safe to call concurrently from the asyncio loop; a threading.Lock
@@ -107,6 +108,14 @@ class SampleStore:
 
             if analyzer:
                 meta["analyzer"] = analyzer
+
+            if yara:
+                existing = {m.get("rule") for m in meta.get("yara", [])}
+                yara_bucket = meta.setdefault("yara", [])
+                for m in yara:
+                    if m.get("rule") not in existing:
+                        yara_bucket.append(m)
+                        existing.add(m.get("rule"))
 
             self._save_meta_atomic(meta_path, meta)
 

@@ -14,25 +14,29 @@ group. See `REWORK.md` for the historical phase plan that got us here.
   extraction at capture time with gzip/zlib/base64 one-layer peel
 - Per-source rate limiting (token bucket per IP)
 - Privilege drop via `--run-as-user` / `--run-as-group`
-- Handler supervision: a crashed serve task emits a `port_down` event
+- Handler supervision with auto-restart on crash + `port_down` / `port_up` events
 - Write buffer bounds on every TCP connection (OOM protection)
 - HTTPS composition verified (type=https + protocol=http)
+- Optional YARA scanning via `--yara-rules`
+- Per-session PCAP-ng capture via `--pcap` with synthesized IPv4+TCP framing
+- Prometheus `/metrics` endpoint via `--metrics-bind`
+- SIGHUP reload of handler TOMLs with diff reconciliation
 - GitHub Actions CI (ruff + pytest on 3.11/3.12/3.13)
-- 135 tests passing, ruff clean
+- 157 tests passing, ruff clean
 
 ## Capture quality & analysis
 
-- [ ] **YARA integration.** Optional — only run if `yara-python` is installed.
-      Emit `yara_match` events with rule name + meta. Best single addition
-      for turning the sample store into a usable corpus.
+- [x] **YARA integration.** Optional via `--yara-rules`; no-op if
+      `yara-python` isn't installed. Matches land in `yara_match` events
+      and aggregate into sample sidecars.
 - [x] **Per-source rate limiting.** Token-bucket limiter in
       `honeyknot/ratelimit.py`; configurable via `--rate-limit-capacity` and
       `--rate-limit-refill`. Emits `rate_limited` event on drop.
 - [x] **Transparent decompression in the IOC extractor.** One layer of
       gzip / zlib / base64 is peeled off before regex extraction.
-- [ ] **PCAP-ng export.** Phase 4 item 12, deferred. Lets existing malware
-      tooling (Zeek, Suricata, wireshark session reassembly) ingest the
-      capture directly instead of going through our raw `.bin` format.
+- [x] **PCAP-ng export.** `--pcap` enables per-session `.pcapng` files in
+      `logs/pcap/` with synthesized Ethernet+IPv4+TCP framing so Wireshark
+      "Follow TCP Stream" works out of the box.
 - [ ] **Raw-dir retention / sweeper.** `logs/raw/` grows unboundedly. Need
       either a size-based sweeper task or documented external cron. Low
       urgency now that `samples/` carries the unique content — raw exists
@@ -62,23 +66,23 @@ group. See `REWORK.md` for the historical phase plan that got us here.
 - [x] **Privilege drop.** `--run-as-user` / `--run-as-group` flags: bind
       as root, drop to unprivileged user via setgroups/setgid/setuid
       *after* all listeners are bound, *before* accepting connections.
-- [ ] **Prometheus metrics endpoint.** Bind `127.0.0.1:<port>` with a
-      tiny text-format exporter: connections-per-port, unique samples,
-      analyzer hits, IOC events, rotations, write errors. Cheap
-      observability, huge operational value.
+- [x] **Prometheus metrics endpoint.** `--metrics-bind host:port` starts
+      a stdlib asyncio HTTP server serving `/metrics`. Counts events
+      broken down by `(event, port, protocol, transport)`, plus a
+      `honeyknot_unique_samples` gauge from the sample store.
 - [ ] **`systemd` unit file** under `contrib/` with
       `CapabilityBoundingSet=CAP_NET_BIND_SERVICE`, `NoNewPrivileges=yes`,
       `ProtectSystem=strict`, `PrivateTmp=yes`. Pairs with privilege drop.
 - [ ] **Dockerfile** (multi-stage, distroless final) + `docker-compose.yml`
       demoing handler volume mount and log-volume persistence.
-- [~] **Handler supervision.** A serve task that exits with an exception
-      now emits a `port_down` event with the error string. Automatic
-      restart is still TODO — currently the port stays down until the
-      daemon is restarted.
+- [x] **Handler supervision with auto-restart.** Supervisor task per port
+      backs off (1s → 32s capped) and re-binds on crash. Emits
+      `port_down` on failure and `port_up` on successful rebind.
 - [x] **Back-pressure on slow clients.** Every TCP connection gets
       `set_write_buffer_limits(high=64 KiB, low=16 KiB)` on accept.
-- [ ] **SIGHUP reload.** Reload handler TOMLs without restarting the
-      daemon. Useful for tuning rule sets under live traffic.
+- [x] **SIGHUP reload.** Diffs handler TOMLs on SIGHUP; unchanged
+      listeners keep running, changed ones restart, added/removed ports
+      are reconciled. `config_reload` event records the diff.
 
 ## Protocol / code correctness gaps
 

@@ -58,6 +58,19 @@ def main():
         "--run-as-group", dest="run_as_group", default=None,
         help="switch to this group after binding sockets",
     )
+    parser.add_argument(
+        "--yara-rules", dest="yara_rules", default=None,
+        help="path to a .yar file or a directory of .yar/.yara files; "
+             "requires yara-python",
+    )
+    parser.add_argument(
+        "--pcap", dest="pcap_enabled", action="store_true", default=False,
+        help="write per-session PCAP-ng files to logs/pcap/ alongside raw/",
+    )
+    parser.add_argument(
+        "--metrics-bind", dest="metrics_bind", default=None,
+        help="expose Prometheus metrics at host:port (e.g. 127.0.0.1:9099)",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_dir, verbose=args.verbose)
@@ -73,6 +86,9 @@ def main():
         rate_limit_refill_per_sec=args.rate_limit_refill_per_sec,
         run_as_user=args.run_as_user,
         run_as_group=args.run_as_group,
+        yara_rules=args.yara_rules,
+        pcap_enabled=args.pcap_enabled,
+        metrics_bind=args.metrics_bind,
     )
     daemon.start()
 

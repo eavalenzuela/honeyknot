@@ -26,6 +26,7 @@ class ConnectionContext:
     port: int
     request_logger: logging.Logger
     raw_capture: Any  # file-like, may be None if capture disabled
+    pcap_writer: Any = None  # honeyknot.pcap.PcapngWriter or None
     emit_event: Callable[..., None] | None = None
     state: dict = field(default_factory=dict)
     closed: bool = False
@@ -34,6 +35,8 @@ class ConnectionContext:
         """Write bytes to the peer and flush."""
         if self.writer.is_closing():
             return
+        if self.pcap_writer is not None:
+            self.pcap_writer.write_outbound(data)
         self.writer.write(data)
         await self.writer.drain()
 
