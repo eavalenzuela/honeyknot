@@ -24,7 +24,8 @@ class TestLoadHandler:
         config = load_handler(HANDLERS_DIR / "ssh_222.toml")
         assert config.port == 222
         assert config.service_type == "tcp"
-        assert len(config.rules) == 1
+        assert config.protocol == "ssh"
+        assert config.protocol_opts["banner"].startswith("SSH-2.0-")
         assert config.response_headers is None
 
     def test_rules_have_compiled_patterns(self):
@@ -99,6 +100,31 @@ class TestLoadHandler:
     def test_encoding_defaults_to_utf8(self):
         config = load_handler(HANDLERS_DIR / "ssh_222.toml")
         assert config.encoding == "utf-8"
+
+    def test_protocol_defaults_to_regex(self, tmp_path):
+        f = tmp_path / "minimal.toml"
+        f.write_text('[service]\nport = 9999\ntype = "tcp"\n')
+        config = load_handler(f)
+        assert config.protocol == "regex"
+        assert config.protocol_opts == {}
+
+    def test_invalid_protocol_rejected(self, tmp_path):
+        bad = tmp_path / "bad.toml"
+        bad.write_text(
+            '[service]\nport = 99\ntype = "tcp"\nprotocol = "bogus"\n'
+        )
+        with pytest.raises(ValueError, match="invalid service.protocol"):
+            load_handler(bad)
+
+    def test_protocol_opts_loaded(self, tmp_path):
+        f = tmp_path / "smtp.toml"
+        f.write_text(
+            '[service]\nport = 25\ntype = "tcp"\nprotocol = "smtp"\n'
+            '[smtp]\nhostname = "mx.example"\n'
+        )
+        config = load_handler(f)
+        assert config.protocol == "smtp"
+        assert config.protocol_opts["hostname"] == "mx.example"
 
 
 class TestLoadAllHandlers:

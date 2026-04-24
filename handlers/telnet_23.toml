@@ -3,12 +3,8 @@
 [service]
 port = 23
 type = "tcp"
-description = "Telnet login honeypot"
+protocol = "telnet"
+description = "Telnet login honeypot with fake shell"
 
-[default_response]
-body = "login: "
-
-[[rules]]
-name = "username_attempt"
-pattern = '^(root|admin|user)'
-response = "Password: "
+[telnet]
+hostname = "gateway"

@@ -3,27 +3,8 @@
 [service]
 port = 25
 type = "tcp"
+protocol = "smtp"
 description = "SMTP honeypot presenting as Postfix"
 
-[default_response]
-body = "220 mail.honeyknot ESMTP Postfix\r\n"
-
-[[rules]]
-name = "ehlo_helo"
-pattern = '^(EHLO|HELO) .*'
-response = "250-honeyknot ESMTP Service Ready\r\n250 PIPELINING\r\n"
-
-[[rules]]
-name = "mail_rcpt"
-pattern = '^(MAIL FROM:.*|RCPT TO:.*)'
-response = "250 2.1.5 Ok\r\n"
-
-[[rules]]
-name = "data_command"
-pattern = '^DATA'
-response = "354 End data with <CR><LF>.<CR><LF>\r\n"
-
-[[rules]]
-name = "quit_command"
-pattern = '^QUIT'
-response = "221 2.0.0 Bye\r\n"
+[smtp]
+hostname = "mail.honeyknot"

@@ -26,6 +26,7 @@ class ServiceConfig:
     """Complete configuration for a single honeypot port."""
     port: int
     service_type: str  # "http", "https", "tcp"
+    protocol: str = "regex"  # "regex", "ssh", "smtp", "ftp", "telnet", "redis"
     rules: list[Rule] = field(default_factory=list)
     response_headers: ResponseHeaders | None = None
     default_response: str = ""
@@ -33,9 +34,11 @@ class ServiceConfig:
     description: str = ""
     tls_certfile: str | None = None
     tls_keyfile: str | None = None
+    protocol_opts: dict = field(default_factory=dict)
 
 
 VALID_SERVICE_TYPES = {"http", "https", "tcp"}
+VALID_PROTOCOLS = {"regex", "ssh", "smtp", "ftp", "telnet", "redis"}
 
 
 def load_handler(path: Path) -> ServiceConfig:
@@ -63,6 +66,17 @@ def load_handler(path: Path) -> ServiceConfig:
             f"{path}: invalid service.type '{svc['type']}', "
             f"must be one of {VALID_SERVICE_TYPES}"
         )
+
+    protocol = svc.get("protocol", "regex")
+    if protocol not in VALID_PROTOCOLS:
+        raise ValueError(
+            f"{path}: invalid service.protocol '{protocol}', "
+            f"must be one of {VALID_PROTOCOLS}"
+        )
+
+    # Protocol-specific opts live in a top-level section named after the protocol.
+    # e.g. [ssh] banner = "...", [smtp] hostname = "..."
+    protocol_opts = data.get(protocol, {}) if protocol != "regex" else {}
 
     # Compile regex patterns at load time
     rules = []
@@ -99,6 +113,7 @@ def load_handler(path: Path) -> ServiceConfig:
     return ServiceConfig(
         port=svc["port"],
         service_type=svc["type"],
+        protocol=protocol,
         description=svc.get("description", ""),
         rules=rules,
         response_headers=headers,
@@ -106,6 +121,7 @@ def load_handler(path: Path) -> ServiceConfig:
         encoding=svc.get("encoding", "utf-8"),
         tls_certfile=tls.get("certfile"),
         tls_keyfile=tls.get("keyfile"),
+        protocol_opts=protocol_opts,
     )
 
 
