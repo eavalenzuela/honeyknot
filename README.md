@@ -159,12 +159,15 @@ response = '<?php system($_REQUEST["cmd"]); ?>'
 - `mqtt` — CONNECT parser; captures `client_id`/`username`/`password`; CONNACK + PINGRESP + SUBACK
 - `mysql` — protocol-10 greeting; parses HandshakeResponse, captures user + auth response bytes; Access denied
 - `postgres` — handles SSLRequest + StartupMessage, captures user/db; AuthenticationCleartextPassword; captures password; ErrorResponse
+- `imap` — LOGIN + AUTHENTICATE PLAIN credential capture, CAPABILITY, LOGOUT
+- `pop3` — APOP-style banner + USER/PASS or APOP digest capture
 
 **TCP, binary fingerprinting:**
 - `smb` — SMB1 Negotiate response, captures post-negotiate probes
 - `mssql` — TDS Pre-Login + captures LOGIN7 + error token
 - `rdp` — X.224 Connection Confirm selecting TLS, captures ClientHello + emits `tls_sni` event
 - `modbus` — MBAP framing parser, responds to Read Coils / Read Registers / Read Device Identification
+- `s7` — Siemens S7comm: COTP CR/CC handshake, Setup Communication ack, logs subsequent Read/Write Var
 
 **UDP:**
 - `dns` — parses query, returns canned A record
@@ -176,6 +179,7 @@ response = '<?php system($_REQUEST["cmd"]); ?>'
 - `sip` — OPTIONS 200 / REGISTER 401-nonce to invite Authorization Digest follow-up
 - `ipmi` — ASF-RMCP Presence Pong
 - `coap` — parses header + Uri-Path; returns 2.05 Content ack
+- `wsd` — WS-Discovery Probe logger + non-amplifying ProbeMatches
 
 **Fallback:**
 - `regex` — back-compat one-shot client-speaks-first matcher; the default
@@ -193,10 +197,13 @@ pytest tests/test_protocols_vnc_http.py::TestHTTP::test_chunked_body_decoded
 
 ## Deployment
 
-See `contrib/` for a `Dockerfile` (python:3.13-slim, non-root,
-`CAP_NET_BIND_SERVICE`) and a hardened `honeyknot.service` systemd unit
-(`NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, restricted
-syscall filter). `systemctl reload honeyknot` triggers a SIGHUP reload.
+See `contrib/` for:
+- `Dockerfile` — python:3.13-slim, non-root, `CAP_NET_BIND_SERVICE`
+- `docker-compose.yml` — volume-mounted handlers, bounded logs volume, metrics-to-loopback
+- `honeyknot.service` — hardened systemd unit (`NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, restricted syscall filter)
+
+`systemctl reload honeyknot` triggers a SIGHUP reload; under
+docker-compose use `docker compose kill --signal=HUP`.
 
 ## Roadmap
 

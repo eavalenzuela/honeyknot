@@ -5,10 +5,10 @@ group. See `REWORK.md` for the historical phase plan that got us here.
 
 ## Status as of this file
 
-- 24 protocol handlers: regex + 10 stateful TCP (ssh, smtp, ftp, telnet,
-  redis, vnc, http, mqtt, mysql, postgres) + 4 binary TCP (smb, mssql,
-  rdp, modbus) + 9 UDP (dns, snmp, ssdp, netbios_ns, chargen, memcached,
-  sip, ipmi, coap)
+- 28 protocol handlers: regex + 12 stateful TCP (ssh, smtp, ftp, telnet,
+  redis, vnc, http, mqtt, mysql, postgres, imap, pop3) + 5 binary TCP
+  (smb, mssql, rdp, modbus, s7) + 10 UDP (dns, snmp, ssdp, netbios_ns,
+  chargen, memcached, sip, ipmi, coap, wsd)
 - Single asyncio event loop, one process
 - Raw per-session captures, content-addressed sample store (SHA-256) with
   `.meta.json` sidecars, JSONL event log with size-based rotation, IOC
@@ -25,10 +25,15 @@ group. See `REWORK.md` for the historical phase plan that got us here.
 - Raw-dir retention sweeper via `--raw-dir-max-bytes`
 - TLS SNI extraction from RDP post-confirm captures → `tls_sni` event
 - HTTP/2 preface detection → `h2_preface` event (+ 505 reply)
-- `contrib/Dockerfile` (multi-stage, non-root) and
+- `contrib/Dockerfile`, `contrib/docker-compose.yml`, and
   `contrib/honeyknot.service` systemd unit with hardening
+- Handler-isolation lint: static check that protocol handlers don't
+  mutate `self` outside `__init__` (would leak state across sessions)
+- Real-asyncio integration tests against live `asyncio.start_server` /
+  `create_datagram_endpoint` for connection lifecycle, rate limiting,
+  sample dedup, and UDP datagram path
 - GitHub Actions CI (ruff + pytest on 3.11/3.12/3.13)
-- 182 tests passing, ruff clean
+- 224 tests passing, ruff clean
 
 ## Capture quality & analysis
 
@@ -57,22 +62,26 @@ group. See `REWORK.md` for the historical phase plan that got us here.
 - [x] **IPMI (UDP/623)** — ASF-RMCP Presence Pong responder.
 - [x] **Modbus (TCP/502)** — MBAP framing + Read Coils / Read Registers
       / Read Device ID.
-- [ ] **S7 (TCP/102)** + **BACnet (UDP/47808)** — ICS recon; add when
-      there is demonstrated traffic on a deployed instance.
+- [x] **S7 (TCP/102)** — COTP Connection Confirm + S7 Setup
+      Communication ack; logs subsequent Job frames.
+- [ ] **BACnet (UDP/47808)** — add when there is demonstrated traffic
+      on a deployed instance.
 - [x] **CoAP (UDP/5683)** — parser + 2.05 Content ack.
 - [x] **MQTT (TCP/1883)** — CONNECT parser that captures
       client_id/user/pass; CONNACK + SUBACK + PINGRESP.
 - [ ] **MQTT over TLS (TCP/8883)** — add once broader TLS composition
       testing is in place.
-- [ ] **WS-Discovery (UDP/3702)** — SOAP-over-UDP amplification target;
-      Shodan-visible.
+- [x] **WS-Discovery (UDP/3702)** — Probe logger + non-amplifying
+      ProbeMatches reply (guaranteed smaller than request).
 - [x] **MySQL (TCP/3306)** — server-first greeting; login capture;
       Access denied.
 - [x] **Postgres (TCP/5432)** — SSLRequest + StartupMessage + cleartext
       password capture.
+- [x] **IMAP (TCP/143)** — LOGIN + AUTHENTICATE PLAIN credential capture.
+- [x] **POP3 (TCP/110)** — APOP banner + USER/PASS / APOP digest capture.
 - [ ] **Telnet over TLS (TCP/992)**, **DNS-over-TLS (TCP/853)**,
-      **IMAP (TCP/143/993)**, **POP3 (TCP/110/995)** — regularly probed;
-      not yet implemented.
+      **IMAP-TLS (TCP/993)**, **POP3-TLS (TCP/995)** — regularly probed;
+      add once broader TLS composition testing is in place.
 - [x] **HTTPS coverage for the new HTTP handler.** Verified live with a
       self-signed cert: TLS terminates, Content-Length body is consumed
       in full, rules match.
@@ -90,8 +99,9 @@ group. See `REWORK.md` for the historical phase plan that got us here.
       `CapabilityBoundingSet=CAP_NET_BIND_SERVICE`, `AmbientCapabilities`,
       `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, restricted
       syscall filter.
-- [x] **Dockerfile** at `contrib/Dockerfile` (python:3.13-slim, non-root).
-      `docker-compose.yml` still TODO.
+- [x] **Dockerfile** + **docker-compose.yml** at `contrib/`
+      (python:3.13-slim, non-root, CAP_NET_BIND_SERVICE,
+      read-only root, tmpfs /tmp, bounded logs volume).
 - [x] **Handler supervision with auto-restart.** Supervisor task per port
       backs off (1s → 32s capped) and re-binds on crash. Emits
       `port_down` on failure and `port_up` on successful rebind.
@@ -107,14 +117,14 @@ group. See `REWORK.md` for the historical phase plan that got us here.
       logs compactly (`"%d bytes (head=<hex>)"`), and RDP/MSSQL don't use
       the per-port request logger at all — they emit semantic messages
       to their module loggers.
-- [ ] **No handler-isolation lint.** A handler that writes to `self.foo`
-      instead of `ctx.state["foo"]` would silently leak between sessions.
-      Add a lightweight ast-based lint pass in CI.
-- [ ] **No asyncio-level integration tests.** Every handler test uses a
-      fake `StreamWriter`. Add a few that go through a real
-      `asyncio.start_server` + `asyncio.open_connection` to catch
-      wire-format regressions (we caught two of those only via live
-      smoke scripts).
+- [x] **Handler-isolation lint.** `tests/test_handler_isolation.py`
+      parametrizes over every handler module and fails if any
+      `on_connect`/`on_data`/`on_close`/`on_datagram` body contains
+      `self.<attr> = ...`. All 27 handler modules currently pass.
+- [x] **asyncio-level integration tests.** `tests/test_server_integration.py`
+      starts real listeners via `PortServer` / `UdpPortServer` on
+      ephemeral ports and verifies connection lifecycle, rate limiting,
+      sample dedup, and UDP datagram path end-to-end.
 - [x] **HTTP handler: HTTP/2 rejection.** Explicit `h2_preface` event
       emitted and 505 returned when the preface is observed.
 - [x] **RDP: post-confirm TLS ClientHello SNI parsing.** `tls_sni` event

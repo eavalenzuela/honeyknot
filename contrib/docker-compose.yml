@@ -1,0 +1,82 @@
+# docker-compose.yml for honeyknot.
+#
+# Build + run:
+#   docker compose -f contrib/docker-compose.yml up --build -d
+#
+# Reload handlers (SIGHUP — diffs TOMLs, keeps unchanged listeners up):
+#   docker compose -f contrib/docker-compose.yml kill --signal=HUP
+#
+# Scrape metrics from the host:
+#   curl http://127.0.0.1:9099/metrics
+#
+# Port publishing: edit `ports` below to map whichever honeypot ports you
+# want exposed on the host. The container user is unprivileged; the
+# CAP_NET_BIND_SERVICE capability lets the process bind privileged ports
+# inside the container.
+
+services:
+  honeyknot:
+    build:
+      context: ..
+      dockerfile: contrib/Dockerfile
+    image: honeyknot:local
+    container_name: honeyknot
+    restart: unless-stopped
+    # Publish only what you want exposed; these are the most commonly
+    # scanned ones. Remove any you don't want on the public IP.
+    ports:
+      - "21:21"
+      - "22:22"
+      - "23:23"
+      - "25:25"
+      - "53:53/udp"
+      - "80:80"
+      - "102:102"
+      - "110:110"
+      - "143:143"
+      - "161:161/udp"
+      - "445:445"
+      - "502:502"
+      - "623:623/udp"
+      - "1433:1433"
+      - "1883:1883"
+      - "3306:3306"
+      - "3389:3389"
+      - "3702:3702/udp"
+      - "5060:5060/udp"
+      - "5432:5432"
+      - "5683:5683/udp"
+      - "5900:5900"
+      - "6379:6379"
+      - "127.0.0.1:9099:9099"   # metrics only to loopback
+    volumes:
+      - ./handlers:/etc/honeyknot/handlers:ro
+      - honeyknot-logs:/var/log/honeyknot
+    cap_add:
+      - NET_BIND_SERVICE
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    command:
+      - "-i"
+      - "0.0.0.0"
+      - "-hd"
+      - "/etc/honeyknot/handlers"
+      - "-ld"
+      - "/var/log/honeyknot"
+      - "--metrics-bind"
+      - "0.0.0.0:9099"
+      - "--rate-limit-capacity"
+      - "40"
+      - "--rate-limit-refill"
+      - "10"
+      - "--raw-dir-max-bytes"
+      - "1073741824"   # 1 GiB
+      - "--pcap"
+
+volumes:
+  honeyknot-logs:

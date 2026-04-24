@@ -1,0 +1,6 @@
+# S7comm honeypot on TCP/102
+
+[service]
+port = 102
+protocol = "s7"
+description = "Siemens S7 COTP + Setup Comm mimic"

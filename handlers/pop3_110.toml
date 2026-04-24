@@ -1,0 +1,6 @@
+# POP3 honeypot on TCP/110
+
+[service]
+port = 110
+protocol = "pop3"
+description = "POP3 with APOP challenge"

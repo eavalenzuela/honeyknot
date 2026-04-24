@@ -1,0 +1,6 @@
+# WS-Discovery honeypot on UDP/3702
+
+[service]
+port = 3702
+protocol = "wsd"
+description = "WS-Discovery Probe logger + non-amplifying ProbeMatches"

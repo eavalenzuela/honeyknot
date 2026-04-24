@@ -17,6 +17,7 @@ from honeyknot.protocols.coap import CoAPHandler
 from honeyknot.protocols.dns import DNSHandler
 from honeyknot.protocols.ftp import FTPHandler
 from honeyknot.protocols.http import HTTPHandler
+from honeyknot.protocols.imap import IMAPHandler
 from honeyknot.protocols.ipmi import IPMIHandler
 from honeyknot.protocols.memcached import MemcachedHandler
 from honeyknot.protocols.modbus import ModbusHandler
@@ -24,10 +25,12 @@ from honeyknot.protocols.mqtt import MQTTHandler
 from honeyknot.protocols.mssql import MSSQLHandler
 from honeyknot.protocols.mysql import MySQLHandler
 from honeyknot.protocols.netbios_ns import NetBIOSNSHandler
+from honeyknot.protocols.pop3 import POP3Handler
 from honeyknot.protocols.postgres import PostgresHandler
 from honeyknot.protocols.rdp import RDPHandler
 from honeyknot.protocols.redis import RedisHandler
 from honeyknot.protocols.regex import RegexHandler
+from honeyknot.protocols.s7 import S7Handler
 from honeyknot.protocols.sip import SIPHandler
 from honeyknot.protocols.smb import SMBHandler
 from honeyknot.protocols.smtp import SMTPHandler
@@ -36,6 +39,7 @@ from honeyknot.protocols.ssdp import SSDPHandler
 from honeyknot.protocols.ssh import SSHHandler
 from honeyknot.protocols.telnet import TelnetHandler
 from honeyknot.protocols.vnc import VNCHandler
+from honeyknot.protocols.wsd import WSDHandler
 
 __all__ = [
     "ChargenHandler",
@@ -45,6 +49,7 @@ __all__ = [
     "DatagramContext",
     "FTPHandler",
     "HTTPHandler",
+    "IMAPHandler",
     "IPMIHandler",
     "MQTTHandler",
     "MSSQLHandler",
@@ -52,11 +57,13 @@ __all__ = [
     "ModbusHandler",
     "MySQLHandler",
     "NetBIOSNSHandler",
+    "POP3Handler",
     "PostgresHandler",
     "ProtocolHandler",
     "RDPHandler",
     "RedisHandler",
     "RegexHandler",
+    "S7Handler",
     "SIPHandler",
     "SMBHandler",
     "SMTPHandler",
@@ -65,6 +72,7 @@ __all__ = [
     "SSHHandler",
     "TelnetHandler",
     "VNCHandler",
+    "WSDHandler",
     "get_handler",
 ]
 
@@ -93,6 +101,10 @@ _REGISTRY: dict[str, type[ProtocolHandler]] = {
     "mqtt": MQTTHandler,
     "mysql": MySQLHandler,
     "postgres": PostgresHandler,
+    "imap": IMAPHandler,
+    "pop3": POP3Handler,
+    "s7": S7Handler,
+    "wsd": WSDHandler,
 }
 
 

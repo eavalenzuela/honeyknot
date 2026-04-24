@@ -1,0 +1,6 @@
+# IMAP honeypot on TCP/143
+
+[service]
+port = 143
+protocol = "imap"
+description = "IMAP4rev1 AUTH=PLAIN/LOGIN honeypot"
