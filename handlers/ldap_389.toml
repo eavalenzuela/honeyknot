@@ -1,0 +1,7 @@
+# LDAP honeypot on TCP/389
+
+[service]
+port = 389
+type = "tcp"
+protocol = "ldap"
+description = "LDAP honeypot — captures bind DN + simple password and search bases"

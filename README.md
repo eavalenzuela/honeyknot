@@ -19,9 +19,10 @@ python -m honeyknot -i 0.0.0.0
 # With common options
 python -m honeyknot -i 0.0.0.0 -v -hd handlers/ -ld logs/
 
-# From a Python shell
+# From a Python shell (any daemon option can be passed as a keyword)
 from honeyknot import run_from_interactive_shell
 run_from_interactive_shell("0.0.0.0")
+run_from_interactive_shell("0.0.0.0", pcap_enabled=True, conn_idle_timeout=30)
 ```
 
 **Flags:**
@@ -42,6 +43,9 @@ run_from_interactive_shell("0.0.0.0")
 | `--pcap` | off | write per-session PCAP-ng files to `logs/pcap/` |
 | `--metrics-bind` | *none* | expose Prometheus metrics at `host:port`, e.g. `127.0.0.1:9099` |
 | `--raw-dir-max-bytes` | 0 (off) | cap total size of `logs/raw/`; oldest files pruned when exceeded |
+| `--conn-idle-timeout` | 120 | drop a TCP connection after this many seconds with no data; `0` disables |
+| `--version` | — | print the version and exit |
+| `--list-protocols` | — | print the built-in handler registry grouped by transport, then exit |
 | `-tc` / `--thread-count` | 5 | accepted for back-compat; ignored under asyncio |
 
 Signals:
@@ -75,13 +79,35 @@ Every event in `events.jsonl` carries `ts`, `event`, `transport`, `port`,
 - `datagram` — UDP datagram received; includes `bytes` and `sha256`
 - `sample_new` — first time we've ever seen this `sha256`
 - `analyzer_hit` — magic-byte identifier matched (ELF/PE/PDF/etc.); includes `offset`
-- `ioc` — extracted URLs / IPs / download commands / shell snippets
+- `ioc` — extracted URLs / IPv4 / IPv6 / `.onion` addresses / download commands (incl. Windows LOLBINs) / shell snippets
 - `protocol` — handler-specific signal: `credentials`, `shell_command`, `http_request`, `vnc_auth_attempt`, etc.
 
 All of these that describe one session share the same `sha256` and `peer`,
 so correlating "which IP dropped this binary" is a trivial filter. See
 [`EVENTS.md`](EVENTS.md) for the complete event catalog with required /
 optional fields and join patterns.
+
+## Offline triage
+
+`honeyknot-stats` reads `events.jsonl` (and its rotated backups) and prints
+a compact summary — no `jq` required:
+
+```bash
+python -m honeyknot.stats -ld logs/        # or: honeyknot-stats -ld logs/
+python -m honeyknot.stats --events-file archived.jsonl -n 20
+```
+
+It reports total/unique counts, events by kind and protocol, the top source
+peers, the most-seen samples by SHA-256, and aggregated IOCs (URLs, IPv4,
+IPv6, `.onion`, downloaders).
+
+## Metrics
+
+With `--metrics-bind host:port`, `/metrics` exposes Prometheus text:
+`honeyknot_events_total` (by event/port/protocol/transport),
+`honeyknot_bytes_captured_total` (by port/protocol/transport),
+`honeyknot_unique_samples`, `honeyknot_uptime_seconds`, and
+`honeyknot_build_info{version=...}`.
 
 ## Handler definitions
 
@@ -171,6 +197,8 @@ response = '<?php system($_REQUEST["cmd"]); ?>'
 - `postgres` — handles SSLRequest + StartupMessage, captures user/db; AuthenticationCleartextPassword; captures password; ErrorResponse
 - `imap` — LOGIN + AUTHENTICATE PLAIN credential capture, CAPABILITY, LOGOUT
 - `pop3` — APOP-style banner + USER/PASS or APOP digest capture
+- `ldap` — minimal BER parser; captures `bindRequest` DN + simple password (`credentials`) and `searchRequest` baseObject (`ldap_search`); replies success
+- `adb` — Android Debug Bridge; completes the `A_CNXN` handshake and logs every `A_OPEN` `shell:` destination (`adb_connect` / `adb_open`)
 
 **TCP, binary fingerprinting:**
 - `smb` — SMB1 Negotiate response, captures post-negotiate probes
@@ -191,6 +219,8 @@ response = '<?php system($_REQUEST["cmd"]); ?>'
 - `coap` — parses header + Uri-Path; returns 2.05 Content ack
 - `wsd` — WS-Discovery Probe logger + non-amplifying ProbeMatches
 - `bacnet` — BACnet/IP Who-Is → I-Am responder (configurable device instance + vendor id)
+- `tftp` — RRQ/WRQ filename + mode capture (`tftp_request`); refuses with an ERROR packet
+- `ntp` — mode-3 client query → same-size mode-4 reply; logs and drops mode-6/mode-7 (`monlist`) without amplifying
 
 **Fallback:**
 - `regex` — back-compat one-shot client-speaks-first matcher; the default

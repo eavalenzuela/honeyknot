@@ -37,6 +37,10 @@ BLOCK_IDB = 0x00000001
 BLOCK_EPB = 0x00000006
 BYTE_ORDER_MAGIC = 0x1A2B3C4D
 
+# Log the "pcap disabled for IPv6" notice only once per process — otherwise a
+# steady stream of IPv6 scanners would flood the log.
+_warned_non_ipv4 = False
+
 
 class PcapngWriter:
     """One pcap-ng file per session. Call `write_inbound` / `write_outbound`
@@ -57,17 +61,28 @@ class PcapngWriter:
             self._fp = None
             return
 
-        # Parse IPs
+        # The synthesized framing here is IPv4-only. If either endpoint is
+        # not a valid IPv4 address (e.g. an IPv6 peer or `::` bind), writing
+        # IPv4 headers would silently claim 0.0.0.0 and produce a corrupt
+        # capture. Disable pcap for this session instead.
         peer_ip_s = peer[0] if peer else "0.0.0.0"
         peer_port = peer[1] if peer and len(peer) > 1 else 0
         try:
             self._client_ip = ipaddress.IPv4Address(peer_ip_s).packed
-        except (ValueError, ipaddress.AddressValueError):
-            self._client_ip = b"\x00" * 4
-        try:
             self._server_ip = ipaddress.IPv4Address(bind_ip).packed
         except (ValueError, ipaddress.AddressValueError):
-            self._server_ip = b"\x00" * 4
+            global _warned_non_ipv4
+            if not _warned_non_ipv4:
+                logger.warning(
+                    "pcap disabled for non-IPv4 session(s) (peer=%s bind=%s); "
+                    "IPv4-only synthesized framing", peer_ip_s, bind_ip,
+                )
+                _warned_non_ipv4 = True
+            with contextlib.suppress(OSError):
+                self._fp.close()
+                self.path.unlink()
+            self._fp = None
+            return
 
         self._client_port = peer_port & 0xFFFF
         self._server_port = listen_port & 0xFFFF

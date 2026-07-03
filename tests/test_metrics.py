@@ -59,6 +59,27 @@ class TestRegistry:
     def test_esc_helper(self):
         assert _esc('a"b\\c\nd') == 'a\\"b\\\\c\\nd'
 
+    def test_build_info_and_uptime_present(self):
+        from honeyknot import __version__
+        r = MetricsRegistry()
+        out = r.render().decode()
+        assert f'honeyknot_build_info{{version="{__version__}"}} 1' in out
+        assert "honeyknot_uptime_seconds " in out
+
+    def test_bytes_captured_counter(self):
+        r = MetricsRegistry()
+        r.record_bytes(100, port=80, protocol="http", transport="tcp")
+        r.record_bytes(50, port=80, protocol="http", transport="tcp")
+        r.record_bytes(0, port=80, protocol="http", transport="tcp")  # ignored
+        out = r.render().decode()
+        assert 'honeyknot_bytes_captured_total{protocol="http",' in out
+        assert 'transport="tcp",port="80"} 150' in out
+
+    def test_bytes_captured_absent_when_zero(self):
+        r = MetricsRegistry()
+        out = r.render().decode()
+        assert "honeyknot_bytes_captured_total" not in out
+
 
 class TestServeMetrics:
     def test_serve_and_scrape(self):

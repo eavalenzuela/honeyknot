@@ -1,0 +1,6 @@
+# NTP honeypot on UDP/123
+
+[service]
+port = 123
+protocol = "ntp"
+description = "NTP honeypot — answers client queries, drops monlist/control (no amplify)"

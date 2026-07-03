@@ -87,8 +87,8 @@ class SampleStore:
                 meta["size"] = size
                 meta["hit_count"] = 0
                 meta["peers"] = []
-                meta["iocs"] = {"urls": [], "ips": [],
-                                "downloads": [], "shell": []}
+                meta["iocs"] = {"urls": [], "ips": [], "ipv6": [],
+                                "onions": [], "downloads": [], "shell": []}
             meta["last_seen"] = now
             meta["hit_count"] = meta.get("hit_count", 0) + 1
 
@@ -100,7 +100,8 @@ class SampleStore:
 
             if iocs:
                 acc = meta.setdefault("iocs", {})
-                for kind in ("urls", "ips", "downloads", "shell"):
+                for kind in ("urls", "ips", "ipv6", "onions",
+                             "downloads", "shell"):
                     bucket = acc.setdefault(kind, [])
                     for item in iocs.get(kind, []):
                         if item not in bucket and len(bucket) < MAX_IOCS_PER_KIND:

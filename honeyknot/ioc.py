@@ -11,8 +11,10 @@ of obfuscated scripts. It's regex over bytes, gated by a printable-ratio
 check so we don't hallucinate "IPs" out of binary SMB/RDP frames.
 
 Output shape:
-    {"urls": [...], "ips": [...], "downloads": [...], "shell": [...]}
-    or None if the buffer is too binary or empty.
+    {"urls": [...], "ips": [...], "ipv6": [...], "onions": [...],
+     "downloads": [...], "shell": [...]}
+    or None if the buffer is too binary or empty. Empty categories are
+    omitted from the returned dict.
 
 Each list is deduplicated and capped.
 """
@@ -31,17 +33,42 @@ _URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Tor hidden-service addresses (v2 = 16 chars, v3 = 56 chars, base32).
+_ONION_RE = re.compile(
+    rb"(?:[a-z2-7]{16}|[a-z2-7]{56})\.onion\b",
+    re.IGNORECASE,
+)
+
 # Dotted quad, with each octet in [0, 255].
 _IPV4_RE = re.compile(
     rb"(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?!\d)"
 )
 
+# IPv6 literals. Deliberately conservative to avoid matching MAC addresses
+# (six colon groups, no `::`) and HH:MM:SS timestamps: we only accept either
+# the full 8-hextet form or a `::`-compressed form.
+_IPV6_RE = re.compile(
+    rb"(?<![0-9A-Fa-f:.])"
+    rb"(?:"
+    rb"(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}"           # full 8-group form
+    rb"|(?:[0-9A-Fa-f]{1,4}:){1,7}:(?:[0-9A-Fa-f]{1,4})?"  # xxxx:: / xxxx::yyyy
+    rb"|::(?:[0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{1,4}"      # ::yyyy...
+    rb")"
+    rb"(?![0-9A-Fa-f:.])"
+)
+
 # Download commands — catch the command + its argument block up to a
 # separator (;, |, &, CR, LF). busybox wrapper is surprisingly common on
-# Mirai-class malware.
+# Mirai-class malware; the Windows LOLBINs (certutil / bitsadmin / mshta /
+# regsvr32 / Invoke-WebRequest) are the equivalent on the PowerShell side.
 _DOWNLOAD_RE = re.compile(
-    rb"(?:wget|curl|tftp|fetch|busybox\s+(?:wget|tftp|curl))"
-    rb"[ \t][^\r\n;|&\x00]{0,300}",
+    rb"(?:wget|curl|tftp|fetch|scp|"
+    rb"busybox\s+(?:wget|tftp|curl)|"
+    rb"certutil(?:\.exe)?[^\r\n]*?-urlcache|"
+    rb"bitsadmin(?:\.exe)?[^\r\n]*?/transfer|"
+    rb"(?:iwr|invoke-webrequest|invoke-restmethod|irm|start-bitstransfer|wget|curl)\b|"
+    rb"mshta(?:\.exe)?|regsvr32(?:\.exe)?[^\r\n]*?/i:https?)"
+    rb"[ \t]?[^\r\n;|&\x00]{0,300}",
     re.IGNORECASE,
 )
 
@@ -79,6 +106,8 @@ def extract_iocs(data: bytes) -> dict[str, list[str]] | None:
 
     urls: list[bytes] = []
     ips: list[bytes] = []
+    ipv6: list[bytes] = []
+    onions: list[bytes] = []
     downloads: list[bytes] = []
     shell: list[bytes] = []
 
@@ -90,16 +119,22 @@ def extract_iocs(data: bytes) -> dict[str, list[str]] | None:
             continue
         urls.extend(_URL_RE.findall(layer))
         ips.extend(_IPV4_RE.findall(layer))
+        ipv6.extend(_IPV6_RE.findall(layer))
+        onions.extend(_ONION_RE.findall(layer))
         downloads.extend(_DOWNLOAD_RE.findall(layer))
         shell.extend(_SHELL_RE.findall(layer))
 
     result = {
         "urls": _dedup_cap(urls),
         "ips": _dedup_cap(ips, filter_noise=_noisy_ip),
+        "ipv6": _dedup_cap(ipv6, filter_noise=_noisy_ipv6),
+        "onions": _dedup_cap(onions, lower=True),
         "downloads": _dedup_cap(downloads),
         "shell": _dedup_cap(shell),
     }
-    if not any(result.values()):
+    # Drop empty categories so events/sidecars stay compact.
+    result = {k: v for k, v in result.items() if v}
+    if not result:
         return None
     return result
 
@@ -162,10 +197,12 @@ def _printable_ratio(data: bytes) -> float:
     return printable / len(data) if data else 0.0
 
 
-def _dedup_cap(matches, filter_noise=None) -> list[str]:
+def _dedup_cap(matches, filter_noise=None, lower=False) -> list[str]:
     seen: list[str] = []
     for raw in matches:
         text = raw.decode("utf-8", errors="replace").rstrip(".,)\"'>")
+        if lower:
+            text = text.lower()
         if filter_noise is not None and filter_noise(text):
             continue
         if text not in seen:
@@ -178,3 +215,10 @@ def _dedup_cap(matches, filter_noise=None) -> list[str]:
 def _noisy_ip(ip: str) -> bool:
     # Drop internal/self-ish addresses that aren't interesting as IOCs.
     return ip in ("0.0.0.0", "127.0.0.1", "255.255.255.255")
+
+
+def _noisy_ipv6(addr: str) -> bool:
+    # Drop loopback / unspecified / link-local-ish literals that aren't
+    # interesting as C2 indicators.
+    low = addr.lower()
+    return low in ("::", "::1") or low.startswith(("fe80:", "ff02:"))

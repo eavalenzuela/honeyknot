@@ -139,6 +139,39 @@ class TestTCPServerIntegration:
         assert len(rate_limited) == 3
         assert len(accepted) == 2
 
+    def test_idle_timeout_reaps_silent_connection(self, tmp_path):
+        port = _free_port()
+        cfg = ServiceConfig(port=port, service_type="tcp", protocol="regex",
+                            default_response="ok")
+        events = EventSink(tmp_path)
+        # A server-greets-nothing regex handler + tiny idle timeout: an idle
+        # client that never sends should be reaped and produce a close event.
+        server = PortServer(cfg, "127.0.0.1", str(tmp_path),
+                            events=events, samples=SampleStore(tmp_path),
+                            idle_timeout=0.2)
+
+        async def run():
+            await server.start()
+            try:
+                reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                # Never send anything; wait past the idle timeout.
+                data = await asyncio.wait_for(reader.read(1), timeout=2.0)
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+                return data
+            finally:
+                await server.stop()
+                events.close()
+
+        # The read returns b"" once the server reaps the idle connection.
+        data = asyncio.run(run())
+        assert data == b""
+        events_list = _read_events(tmp_path)
+        kinds = {e["event"] for e in events_list}
+        assert "connect" in kinds
+        assert "close" in kinds
+
     def test_sample_dedup_across_connections(self, tmp_path):
         port = _free_port()
         cfg = ServiceConfig(port=port, service_type="tcp", protocol="regex",

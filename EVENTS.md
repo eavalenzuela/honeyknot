@@ -67,14 +67,17 @@ Magic-byte match somewhere in the captured bytes. See `honeyknot/analyzer.py` fo
 | `result` | object | `{"type": "ELF"\|"PE/EXE"\|"PDF"\|..., "offset": int, ...type-specific...}` |
 
 ### `ioc`
-Regex-extracted indicators. One event per session that has any hits; fields can be empty lists.
+Regex-extracted indicators. One event per session that has any hits. Empty
+categories are omitted from the object, so only the non-empty keys appear.
 
 | field | type | description |
 |---|---|---|
 | `sha256` | string | |
 | `urls` | list[string] | matched HTTP/HTTPS URLs |
 | `ips` | list[string] | IPv4 literals (with 0.0.0.0/127.0.0.1/255.255.255.255 filtered) |
-| `downloads` | list[string] | matched wget/curl/tftp/fetch/busybox invocations |
+| `ipv6` | list[string] | IPv6 literals (loopback/unspecified/link-local filtered) |
+| `onions` | list[string] | Tor v2/v3 `.onion` hidden-service addresses (lowercased) |
+| `downloads` | list[string] | matched wget/curl/tftp/fetch/scp/busybox invocations and Windows LOLBINs (certutil, bitsadmin, `Invoke-WebRequest`/`iwr`, mshta, regsvr32) |
 | `shell` | list[string] | matched shell pivots (chmod +x, base64 -d, eval, /tmp/*, nc, python -c, powershell -enc) |
 
 ### `yara_match`
@@ -96,9 +99,10 @@ Captured auth material. Emitted by the handlers listed.
 
 | field | type | source |
 |---|---|---|
-| `service` | string | which protocol, e.g. `"ftp"`, `"telnet"`, `"mqtt"` |
-| `username` | string | FTP, Telnet, MySQL, Postgres, IMAP, POP3, MQTT |
+| `service` | string | which protocol, e.g. `"ftp"`, `"telnet"`, `"mqtt"`, `"ldap"` |
+| `username` | string | FTP, Telnet, MySQL, Postgres, IMAP, POP3, MQTT; LDAP bind DN |
 | `password` | string | same as above, cleartext |
+| `method` | string \| omitted | LDAP auth type (`"simple"`, `"sasl"`) |
 | `mechanism` | string \| omitted | `"PLAIN"`, `"APOP"` |
 | `authzid` | string \| omitted | SASL PLAIN authzid |
 | `digest` | string \| omitted | POP3 APOP digest hex |
@@ -198,6 +202,44 @@ post-handshake captured bytes (today: the RDP handler).
 |---|---|
 | `source` | string | which handler produced this (`"rdp"`) |
 | `sni` | string | server_name extension hostname |
+
+### `protocol / tftp_request`
+TFTP handler. A read (RRQ) or write (WRQ) request; we log it and reply ERROR.
+
+| field | type |
+|---|---|
+| `op` | `"RRQ"` \| `"WRQ"` |
+| `filename` | string |
+| `mode` | string (`"octet"`, `"netascii"`, …) |
+
+### `protocol / ntp_request`, `ntp_control`, `ntp_private`
+NTP handler. `ntp_request` is a normal mode-3 client query (answered with a
+same-size mode-4 reply). `ntp_control` (mode 6) and `ntp_private` (mode 7,
+the `monlist` amplification vector) are logged and dropped without replying.
+
+| field | type |
+|---|---|
+| `version` | int | NTP version from the request |
+| `mode` | int | present on `ntp_control` / `ntp_private` |
+
+### `protocol / adb_connect`, `adb_open`
+ADB handler (Android Debug Bridge, TCP/5555). `adb_connect` is the `A_CNXN`
+handshake; `adb_open` captures each `A_OPEN` destination — the `shell:`
+command line ADB.Miner-class botnets drop.
+
+| field | type |
+|---|---|
+| `system` | string | client system-identity banner (on `adb_connect`) |
+| `version`, `maxdata` | int | ADB protocol version / max payload (on `adb_connect`) |
+| `destination` | string | the opened stream target, e.g. `"shell:..."` (on `adb_open`) |
+
+### `protocol / ldap_search`
+LDAP handler. A `searchRequest` baseObject. (Bind credentials arrive as a
+`credentials` event with `service = "ldap"`.)
+
+| field | type |
+|---|---|
+| `base` | string | search baseObject DN |
 
 ## Daemon-level (`transport: "-"`, `port: 0`)
 

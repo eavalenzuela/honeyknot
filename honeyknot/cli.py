@@ -2,13 +2,40 @@
 
 import argparse
 
+from honeyknot import __version__
+from honeyknot.config import UDP_PROTOCOLS, VALID_PROTOCOLS
 from honeyknot.logger import setup_logging
 from honeyknot.server import HoneyknotDaemon
+
+
+class _ListProtocolsAction(argparse.Action):
+    """`--list-protocols`: print the handler registry grouped by transport."""
+
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(option_strings, dest, nargs=0,
+                         default=argparse.SUPPRESS, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        udp = sorted(p for p in VALID_PROTOCOLS if p in UDP_PROTOCOLS)
+        tcp = sorted(p for p in VALID_PROTOCOLS if p not in UDP_PROTOCOLS)
+        print("Built-in protocol handlers:")
+        print(f"  TCP ({len(tcp)}): " + ", ".join(tcp))
+        print(f"  UDP ({len(udp)}): " + ", ".join(udp))
+        parser.exit()
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Honeyknot: a highly-configurable multi-port honeypot"
+    )
+    parser.add_argument(
+        "--version", action="version",
+        version=f"honeyknot {__version__}",
+    )
+    parser.add_argument(
+        "--list-protocols", action=_ListProtocolsAction,
+        help="list the built-in protocol handlers grouped by transport, "
+             "then exit",
     )
     parser.add_argument(
         "-i", "--bind-ip", dest="bind_ip", required=True,
@@ -76,6 +103,12 @@ def main():
         help="total byte cap for logs/raw/; oldest files deleted when "
              "exceeded. 0 (default) disables sweeping.",
     )
+    parser.add_argument(
+        "--conn-idle-timeout", dest="conn_idle_timeout", type=float,
+        default=120.0,
+        help="drop a TCP connection after this many seconds with no data; "
+             "0 disables (default: 120)",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_dir, verbose=args.verbose)
@@ -95,6 +128,7 @@ def main():
         pcap_enabled=args.pcap_enabled,
         metrics_bind=args.metrics_bind,
         raw_dir_max_bytes=args.raw_dir_max_bytes,
+        conn_idle_timeout=args.conn_idle_timeout,
     )
     daemon.start()
 

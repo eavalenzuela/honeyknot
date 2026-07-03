@@ -7,6 +7,7 @@ per-connection state via a `ConnectionContext`.
 """
 
 from honeyknot.config import ServiceConfig
+from honeyknot.protocols.adb import ADBHandler
 from honeyknot.protocols.bacnet import BACnetHandler
 from honeyknot.protocols.base import (
     ConnectionContext,
@@ -20,12 +21,14 @@ from honeyknot.protocols.ftp import FTPHandler
 from honeyknot.protocols.http import HTTPHandler
 from honeyknot.protocols.imap import IMAPHandler
 from honeyknot.protocols.ipmi import IPMIHandler
+from honeyknot.protocols.ldap import LDAPHandler
 from honeyknot.protocols.memcached import MemcachedHandler
 from honeyknot.protocols.modbus import ModbusHandler
 from honeyknot.protocols.mqtt import MQTTHandler
 from honeyknot.protocols.mssql import MSSQLHandler
 from honeyknot.protocols.mysql import MySQLHandler
 from honeyknot.protocols.netbios_ns import NetBIOSNSHandler
+from honeyknot.protocols.ntp import NTPHandler
 from honeyknot.protocols.pop3 import POP3Handler
 from honeyknot.protocols.postgres import PostgresHandler
 from honeyknot.protocols.rdp import RDPHandler
@@ -39,10 +42,12 @@ from honeyknot.protocols.snmp import SNMPHandler
 from honeyknot.protocols.ssdp import SSDPHandler
 from honeyknot.protocols.ssh import SSHHandler
 from honeyknot.protocols.telnet import TelnetHandler
+from honeyknot.protocols.tftp import TFTPHandler
 from honeyknot.protocols.vnc import VNCHandler
 from honeyknot.protocols.wsd import WSDHandler
 
 __all__ = [
+    "ADBHandler",
     "BACnetHandler",
     "ChargenHandler",
     "CoAPHandler",
@@ -53,11 +58,13 @@ __all__ = [
     "HTTPHandler",
     "IMAPHandler",
     "IPMIHandler",
+    "LDAPHandler",
     "MQTTHandler",
     "MSSQLHandler",
     "MemcachedHandler",
     "ModbusHandler",
     "MySQLHandler",
+    "NTPHandler",
     "NetBIOSNSHandler",
     "POP3Handler",
     "PostgresHandler",
@@ -72,6 +79,7 @@ __all__ = [
     "SNMPHandler",
     "SSDPHandler",
     "SSHHandler",
+    "TFTPHandler",
     "TelnetHandler",
     "VNCHandler",
     "WSDHandler",
@@ -108,6 +116,10 @@ _REGISTRY: dict[str, type[ProtocolHandler]] = {
     "s7": S7Handler,
     "wsd": WSDHandler,
     "bacnet": BACnetHandler,
+    "adb": ADBHandler,
+    "ldap": LDAPHandler,
+    "tftp": TFTPHandler,
+    "ntp": NTPHandler,
 }
 
 

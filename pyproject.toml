@@ -41,6 +41,7 @@ yara = ["yara-python>=4.0"]
 [project.scripts]
 honeyknot = "honeyknot.cli:main"
 honeyknot-gencert = "honeyknot.gencert:main"
+honeyknot-stats = "honeyknot.stats:main"
 
 [tool.setuptools]
 packages = ["honeyknot", "honeyknot.protocols"]

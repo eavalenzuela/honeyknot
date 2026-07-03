@@ -47,11 +47,12 @@ VALID_PROTOCOLS = {
     "sip", "ipmi", "coap",
     "modbus", "mqtt", "mysql", "postgres",
     "imap", "pop3", "s7", "wsd",
-    "bacnet",
+    "bacnet", "adb", "ldap",
+    "tftp", "ntp",
 }
 VALID_TRANSPORTS = {"tcp", "udp"}
 UDP_PROTOCOLS = {"dns", "snmp", "ssdp", "netbios_ns", "chargen", "memcached",
-                 "sip", "ipmi", "coap", "wsd", "bacnet"}
+                 "sip", "ipmi", "coap", "wsd", "bacnet", "tftp", "ntp"}
 
 
 def load_handler(path: Path) -> ServiceConfig:
@@ -70,8 +71,13 @@ def load_handler(path: Path) -> ServiceConfig:
     if "port" not in svc:
         raise ValueError(f"{path}: missing service.port")
 
-    if not isinstance(svc["port"], int):
+    if not isinstance(svc["port"], int) or isinstance(svc["port"], bool):
         raise ValueError(f"{path}: service.port must be an integer")
+
+    if not (1 <= svc["port"] <= 65535):
+        raise ValueError(
+            f"{path}: service.port {svc['port']} out of range (1..65535)"
+        )
 
     service_type = svc.get("type", "tcp")
     if service_type not in VALID_SERVICE_TYPES:
@@ -167,8 +173,16 @@ def load_all_handlers(handler_dir: str | Path) -> list[ServiceConfig]:
         raise FileNotFoundError(f"Handler directory not found: {handler_dir}")
 
     configs = []
+    seen_ports: dict[int, Path] = {}
     for toml_file in sorted(handler_dir.glob("*.toml")):
-        configs.append(load_handler(toml_file))
+        cfg = load_handler(toml_file)
+        if cfg.port in seen_ports:
+            raise ValueError(
+                f"{toml_file}: port {cfg.port} already claimed by "
+                f"{seen_ports[cfg.port].name}; each port needs a unique handler"
+            )
+        seen_ports[cfg.port] = toml_file
+        configs.append(cfg)
 
     if not configs:
         raise FileNotFoundError(

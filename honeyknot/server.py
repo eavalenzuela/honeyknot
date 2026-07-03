@@ -34,6 +34,72 @@ READ_CHUNK = 65536
 ACCEPT_BACKLOG = 128
 WRITE_BUFFER_HIGH = 64 * 1024
 WRITE_BUFFER_LOW = 16 * 1024
+DEFAULT_IDLE_TIMEOUT = 120.0  # seconds a TCP conn may stall before we reap it
+
+
+def _finalize_payload(*, data: bytes, peer: tuple, transport: str,
+                      port: int, protocol: str,
+                      events: EventSink | None,
+                      samples: SampleStore | None,
+                      yara_scanner: YaraScanner | None,
+                      logger: logging.Logger) -> str | None:
+    """Hash, store, analyze, IOC-extract, YARA-scan, update the sidecar.
+
+    Shared by the TCP capture-close and UDP datagram paths so the two
+    transports can never drift. Returns the sha256 hex digest, or None if
+    the payload was too small to bother with.
+    """
+    if len(data) < 4:
+        return None
+
+    if events is not None and events.metrics is not None:
+        events.metrics.record_bytes(
+            len(data), port=port, protocol=protocol, transport=transport,
+        )
+
+    digest, is_new, path = (None, False, None)
+    if samples is not None:
+        digest, is_new, path = samples.store(data)
+
+    result = scan_payload(data)
+    if result:
+        logger.info("Analyzer hit from %s: %s", peer, result)
+        if events is not None:
+            events.emit(
+                "analyzer_hit", transport=transport, port=port,
+                protocol=protocol, peer=peer, sha256=digest, result=result,
+            )
+
+    iocs = extract_iocs(data)
+    if iocs and events is not None:
+        events.emit(
+            "ioc", transport=transport, port=port, protocol=protocol,
+            peer=peer, sha256=digest, **iocs,
+        )
+
+    if is_new and events is not None:
+        events.emit(
+            "sample_new", transport=transport, port=port, protocol=protocol,
+            peer=peer, sha256=digest, bytes=len(data),
+        )
+
+    yara_matches: list = []
+    if yara_scanner is not None and yara_scanner.enabled:
+        yara_matches = yara_scanner.scan(data)
+        if yara_matches and events is not None:
+            events.emit(
+                "yara_match", transport=transport, port=port,
+                protocol=protocol, peer=peer, sha256=digest,
+                matches=yara_matches,
+            )
+
+    if samples is not None and digest is not None and path is not None:
+        samples.update_meta(
+            digest, size=len(data), peer=peer,
+            iocs=iocs, analyzer=result, yara=yara_matches,
+        )
+
+    return digest
 
 
 class PortServer:
@@ -45,7 +111,8 @@ class PortServer:
                  samples: SampleStore | None = None,
                  rate_limiter: RateLimiter | None = None,
                  yara_scanner: YaraScanner | None = None,
-                 pcap_enabled: bool = False):
+                 pcap_enabled: bool = False,
+                 idle_timeout: float = DEFAULT_IDLE_TIMEOUT):
         self.config = config
         self.bind_ip = bind_ip
         self.log_dir = Path(log_dir)
@@ -55,6 +122,7 @@ class PortServer:
         self.rate_limiter = rate_limiter
         self.yara_scanner = yara_scanner
         self.pcap_enabled = pcap_enabled
+        self.idle_timeout = idle_timeout
         self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
         self.request_logger = get_port_logger(config.port, log_dir)
         self.handler: ProtocolHandler = get_handler(config)
@@ -173,8 +241,17 @@ class PortServer:
 
             while not ctx.closed:
                 try:
-                    data = await reader.read(READ_CHUNK)
+                    if self.idle_timeout and self.idle_timeout > 0:
+                        data = await asyncio.wait_for(
+                            reader.read(READ_CHUNK), timeout=self.idle_timeout,
+                        )
+                    else:
+                        data = await reader.read(READ_CHUNK)
                 except (ConnectionResetError, BrokenPipeError):
+                    break
+                except TimeoutError:
+                    self.logger.debug("Idle timeout (%.0fs) for %s on port %d",
+                                      self.idle_timeout, peer, self.config.port)
                     break
                 if not data:
                     break
@@ -242,54 +319,12 @@ class PortServer:
 
     def _finalize_capture(self, data: bytes, peer: tuple) -> str | None:
         """Hash, store, analyze, IOC-extract. Returns sha256 hex or None."""
-        if len(data) < 4:
-            return None
-        digest, is_new, _path = (None, False, None)
-        if self.samples is not None:
-            digest, is_new, _path = self.samples.store(data)
-
-        result = scan_payload(data)
-        if result:
-            self.logger.info("Analyzer hit from %s: %s", peer, result)
-            if self.events is not None:
-                self.events.emit(
-                    "analyzer_hit", transport="tcp", port=self.config.port,
-                    protocol=self.config.protocol, peer=peer,
-                    sha256=digest, result=result,
-                )
-
-        iocs = extract_iocs(data)
-        if iocs and self.events is not None:
-            self.events.emit(
-                "ioc", transport="tcp", port=self.config.port,
-                protocol=self.config.protocol, peer=peer,
-                sha256=digest, **iocs,
-            )
-
-        if is_new and self.events is not None:
-            self.events.emit(
-                "sample_new", transport="tcp", port=self.config.port,
-                protocol=self.config.protocol, peer=peer,
-                sha256=digest, bytes=len(data),
-            )
-
-        yara_matches = []
-        if self.yara_scanner is not None and self.yara_scanner.enabled:
-            yara_matches = self.yara_scanner.scan(data)
-            if yara_matches and self.events is not None:
-                self.events.emit(
-                    "yara_match", transport="tcp", port=self.config.port,
-                    protocol=self.config.protocol, peer=peer,
-                    sha256=digest, matches=yara_matches,
-                )
-
-        if self.samples is not None and digest is not None and _path is not None:
-            self.samples.update_meta(
-                digest, size=len(data), peer=peer,
-                iocs=iocs, analyzer=result, yara=yara_matches,
-            )
-
-        return digest
+        return _finalize_payload(
+            data=data, peer=peer, transport="tcp",
+            port=self.config.port, protocol=self.config.protocol,
+            events=self.events, samples=self.samples,
+            yara_scanner=self.yara_scanner, logger=self.logger,
+        )
 
 
 class _UdpProtocol(asyncio.DatagramProtocol):
@@ -407,54 +442,12 @@ class UdpPortServer:
 
     def _finalize_datagram(self, data: bytes, peer: tuple) -> str | None:
         """Hash, store, analyze, IOC-extract. Returns sha256 hex or None."""
-        if len(data) < 4:
-            return None
-        digest, is_new, _path = (None, False, None)
-        if self.samples is not None:
-            digest, is_new, _path = self.samples.store(data)
-
-        result = scan_payload(data)
-        if result:
-            self.logger.info("Analyzer hit from %s: %s", peer, result)
-            if self.events is not None:
-                self.events.emit(
-                    "analyzer_hit", transport="udp", port=self.config.port,
-                    protocol=self.config.protocol, peer=peer,
-                    sha256=digest, result=result,
-                )
-
-        iocs = extract_iocs(data)
-        if iocs and self.events is not None:
-            self.events.emit(
-                "ioc", transport="udp", port=self.config.port,
-                protocol=self.config.protocol, peer=peer,
-                sha256=digest, **iocs,
-            )
-
-        if is_new and self.events is not None:
-            self.events.emit(
-                "sample_new", transport="udp", port=self.config.port,
-                protocol=self.config.protocol, peer=peer,
-                sha256=digest, bytes=len(data),
-            )
-
-        yara_matches = []
-        if self.yara_scanner is not None and self.yara_scanner.enabled:
-            yara_matches = self.yara_scanner.scan(data)
-            if yara_matches and self.events is not None:
-                self.events.emit(
-                    "yara_match", transport="udp", port=self.config.port,
-                    protocol=self.config.protocol, peer=peer,
-                    sha256=digest, matches=yara_matches,
-                )
-
-        if self.samples is not None and digest is not None and _path is not None:
-            self.samples.update_meta(
-                digest, size=len(data), peer=peer,
-                iocs=iocs, analyzer=result, yara=yara_matches,
-            )
-
-        return digest
+        return _finalize_payload(
+            data=data, peer=peer, transport="udp",
+            port=self.config.port, protocol=self.config.protocol,
+            events=self.events, samples=self.samples,
+            yara_scanner=self.yara_scanner, logger=self.logger,
+        )
 
 
 class HoneyknotDaemon:
@@ -472,7 +465,8 @@ class HoneyknotDaemon:
                  yara_rules: str | None = None,
                  pcap_enabled: bool = False,
                  metrics_bind: str | None = None,
-                 raw_dir_max_bytes: int = 0):
+                 raw_dir_max_bytes: int = 0,
+                 conn_idle_timeout: float = DEFAULT_IDLE_TIMEOUT):
         self.bind_ip = bind_ip
         self.handler_dir = handler_dir
         self.log_dir = log_dir
@@ -489,6 +483,7 @@ class HoneyknotDaemon:
         self.pcap_enabled = pcap_enabled
         self.metrics_bind = metrics_bind
         self.raw_dir_max_bytes = raw_dir_max_bytes
+        self.conn_idle_timeout = conn_idle_timeout
 
     def start(self) -> None:
         asyncio.run(self._run())
@@ -609,6 +604,7 @@ class HoneyknotDaemon:
             cfg, self.bind_ip, self.log_dir,
             self.max_capture_bytes, events, samples,
             limiter, yara_scanner, pcap_enabled=self.pcap_enabled,
+            idle_timeout=self.conn_idle_timeout,
         )
 
     async def _reload_handlers(self, servers, supervisors, events, samples,

@@ -5,10 +5,10 @@ group. See `REWORK.md` for the historical phase plan that got us here.
 
 ## Status as of this file
 
-- 29 protocol handlers: regex + 12 stateful TCP (ssh, smtp, ftp, telnet,
-  redis, vnc, http, mqtt, mysql, postgres, imap, pop3) + 5 binary TCP
-  (smb, mssql, rdp, modbus, s7) + 11 UDP (dns, snmp, ssdp, netbios_ns,
-  chargen, memcached, sip, ipmi, coap, wsd, bacnet)
+- 33 protocol handlers: regex + 14 stateful TCP (ssh, smtp, ftp, telnet,
+  redis, vnc, http, mqtt, mysql, postgres, imap, pop3, ldap, adb) + 5 binary
+  TCP (smb, mssql, rdp, modbus, s7) + 13 UDP (dns, snmp, ssdp, netbios_ns,
+  chargen, memcached, sip, ipmi, coap, wsd, bacnet, tftp, ntp)
 - Generic TLS wrapping (`[tls] enabled = true` on any TCP handler);
   bundled IMAPS/POP3S/MQTTS/SMTPS TOMLs; `python -m honeyknot.gencert`
   self-signed cert helper
@@ -38,9 +38,15 @@ group. See `REWORK.md` for the historical phase plan that got us here.
   mutate `self` outside `__init__` (would leak state across sessions)
 - Real-asyncio integration tests against live `asyncio.start_server` /
   `create_datagram_endpoint` for connection lifecycle, rate limiting,
-  sample dedup, and UDP datagram path
+  sample dedup, connection idle-timeout, and UDP datagram path
 - GitHub Actions CI (ruff + pytest on 3.11/3.12/3.13)
-- 224 tests passing, ruff clean
+- Expanded analyzer signatures (Mach-O/Java-class/7z/xz/bz2/cab/dex/lnk/
+  wasm/shebang) and IOC extraction (IPv6, `.onion`, Windows LOLBINs)
+- Per-connection idle timeout (`--conn-idle-timeout`), IPv4-only-safe pcap,
+  config port-range + duplicate-port validation, DRY'd capture-finalize path
+- `honeyknot-stats` offline events.jsonl analyzer; `--version` /
+  `--list-protocols` CLI flags; build-info/uptime/bytes-captured metrics
+- 299 tests passing, ruff clean
 
 ## Capture quality & analysis
 
@@ -89,6 +95,14 @@ group. See `REWORK.md` for the historical phase plan that got us here.
 - [x] **IMAP-TLS (TCP/993)** and **POP3-TLS (TCP/995)** — bundled
       `imaps_993.toml` and `pop3s_995.toml` use generic TLS wrapping.
 - [x] **SMTPS (TCP/465)** — bundled `smtps_465.toml`.
+- [x] **TFTP (UDP/69)** — RRQ/WRQ filename + mode capture; ERROR reply
+      (non-amplifying). Bundled `tftp_69.toml`.
+- [x] **NTP (UDP/123)** — mode-3 client → same-size mode-4 reply;
+      mode-6/mode-7 (`monlist`) logged + dropped. Bundled `ntp_123.toml`.
+- [x] **ADB (TCP/5555)** — Android Debug Bridge; `A_CNXN` handshake +
+      `A_OPEN` `shell:` command capture. Bundled `adb_5555.toml`.
+- [x] **LDAP (TCP/389)** — BER `bindRequest` DN+password capture and
+      `searchRequest` baseObject. Bundled `ldap_389.toml`.
 - [ ] **Telnet-TLS (TCP/992)** and **DNS-over-TLS (TCP/853)** — add
       TOMLs when there is demonstrated traffic on a deployed instance.
 - [x] **HTTPS coverage for the new HTTP handler.** Verified live with a

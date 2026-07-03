@@ -1,0 +1,6 @@
+# TFTP honeypot on UDP/69
+
+[service]
+port = 69
+protocol = "tftp"
+description = "TFTP honeypot — logs RRQ/WRQ filenames, refuses with ERROR"

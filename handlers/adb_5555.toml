@@ -1,0 +1,10 @@
+# Android Debug Bridge honeypot on TCP/5555
+
+[service]
+port = 5555
+type = "tcp"
+protocol = "adb"
+description = "ADB honeypot — completes A_CNXN, logs A_OPEN shell command lines"
+
+[adb]
+banner = "device::ro.product.name=honeyknot;ro.product.model=hk;ro.product.device=hk;features=cmd,shell_v2"

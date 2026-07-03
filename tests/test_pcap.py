@@ -87,6 +87,20 @@ class TestPcapng:
         w.close()
         w.write_inbound(b"should be ignored")  # must not raise
 
+    def test_ipv6_peer_disables_writer(self, tmp_path):
+        path = tmp_path / "x.pcapng"
+        w = PcapngWriter(path, ("2001:db8::1", 12345), "127.0.0.1", 22)
+        # IPv4-only synthesized framing → writer disabled, no corrupt file.
+        assert w.open is False
+        assert not path.exists()
+        w.write_inbound(b"ignored")  # must not raise
+        w.close()
+
+    def test_ipv6_bind_disables_writer(self, tmp_path):
+        path = tmp_path / "x.pcapng"
+        w = PcapngWriter(path, ("10.0.0.5", 12345), "::", 22)
+        assert w.open is False
+
 
 class TestChecksum:
     def test_rfc1071_example(self):

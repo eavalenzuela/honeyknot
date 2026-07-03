@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import defaultdict
 from pathlib import Path
+
+from honeyknot import __version__
 
 logger = logging.getLogger("honeyknot.metrics")
 
@@ -30,7 +33,9 @@ class MetricsRegistry:
 
     def __init__(self):
         self._event_counts: dict[tuple, int] = defaultdict(int)
+        self._bytes_captured: dict[tuple, int] = defaultdict(int)
         self.samples_path: Path | None = None
+        self._start = time.monotonic()
 
     def record_event(self, event: str, *, port: int | None = None,
                      protocol: str | None = None,
@@ -38,8 +43,25 @@ class MetricsRegistry:
         key = (event, protocol or "-", transport or "-", port or 0)
         self._event_counts[key] += 1
 
+    def record_bytes(self, n: int, *, port: int | None = None,
+                     protocol: str | None = None,
+                     transport: str | None = None) -> None:
+        if n <= 0:
+            return
+        key = (protocol or "-", transport or "-", port or 0)
+        self._bytes_captured[key] += n
+
     def render(self) -> bytes:
         lines: list[str] = []
+        lines.append("# HELP honeyknot_build_info Build metadata (constant 1)")
+        lines.append("# TYPE honeyknot_build_info gauge")
+        lines.append(f'honeyknot_build_info{{version="{_esc(__version__)}"}} 1')
+
+        lines.append("# HELP honeyknot_uptime_seconds Seconds since the "
+                     "metrics registry was created")
+        lines.append("# TYPE honeyknot_uptime_seconds gauge")
+        lines.append(f"honeyknot_uptime_seconds {time.monotonic() - self._start:.3f}")
+
         lines.append("# HELP honeyknot_events_total Count of observed events")
         lines.append("# TYPE honeyknot_events_total counter")
         for (event, proto, transport, port), n in sorted(self._event_counts.items()):
@@ -50,6 +72,18 @@ class MetricsRegistry:
                 f'port="{port}"'
             )
             lines.append(f"honeyknot_events_total{{{labels}}} {n}")
+
+        if self._bytes_captured:
+            lines.append("# HELP honeyknot_bytes_captured_total Bytes captured "
+                         "across all sessions")
+            lines.append("# TYPE honeyknot_bytes_captured_total counter")
+            for (proto, transport, port), n in sorted(self._bytes_captured.items()):
+                labels = (
+                    f'protocol="{_esc(proto)}",'
+                    f'transport="{_esc(transport)}",'
+                    f'port="{port}"'
+                )
+                lines.append(f"honeyknot_bytes_captured_total{{{labels}}} {n}")
 
         if self.samples_path is not None and self.samples_path.exists():
             try:

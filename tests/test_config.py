@@ -90,6 +90,25 @@ class TestLoadHandler:
         with pytest.raises(ValueError, match="service.port must be an integer"):
             load_handler(bad)
 
+    def test_port_zero_rejected(self, tmp_path):
+        bad = tmp_path / "bad.toml"
+        bad.write_text('[service]\nport = 0\ntype = "tcp"\n')
+        with pytest.raises(ValueError, match="out of range"):
+            load_handler(bad)
+
+    def test_port_above_65535_rejected(self, tmp_path):
+        bad = tmp_path / "bad.toml"
+        bad.write_text('[service]\nport = 70000\ntype = "tcp"\n')
+        with pytest.raises(ValueError, match="out of range"):
+            load_handler(bad)
+
+    def test_port_bool_rejected(self, tmp_path):
+        # TOML booleans are ints in Python; make sure `true` isn't port 1.
+        bad = tmp_path / "bad.toml"
+        bad.write_text('[service]\nport = true\ntype = "tcp"\n')
+        with pytest.raises(ValueError, match="must be an integer"):
+            load_handler(bad)
+
     def test_no_rules_is_valid(self, tmp_path):
         f = tmp_path / "minimal.toml"
         f.write_text('[service]\nport = 9999\ntype = "tcp"\n')
@@ -162,3 +181,13 @@ class TestLoadAllHandlers:
     def test_nonexistent_directory_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="Handler directory not found"):
             load_all_handlers(tmp_path / "nope")
+
+    def test_duplicate_port_rejected(self, tmp_path):
+        (tmp_path / "a.toml").write_text(
+            '[service]\nport = 8080\ntype = "tcp"\n'
+        )
+        (tmp_path / "b.toml").write_text(
+            '[service]\nport = 8080\nprotocol = "ssh"\n'
+        )
+        with pytest.raises(ValueError, match="already claimed"):
+            load_all_handlers(tmp_path)

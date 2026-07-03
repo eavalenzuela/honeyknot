@@ -10,9 +10,10 @@ object per line per observed event. Schema (required fields):
     protocol  str (the handler name, e.g. "ssh", "regex", "dns")
     peer      "<ip>:<port>" of the remote party
 
-Event-specific fields are merged into the object. `bytes_in` and
-`bytes_out` are byte counts on close; `bytes` is the datagram size on
-datagram events; `detail` is a free-form dict for protocol events.
+Event-specific fields are merged into the object. `bytes_in` is the byte
+count on close; `bytes` is the datagram size on datagram events; protocol
+handlers attach their own fields (e.g. `name`, captured credentials). See
+EVENTS.md for the full per-event catalog.
 
 Writes are line-buffered and best-effort — a logging failure must not
 interfere with the honeypot's real job.
