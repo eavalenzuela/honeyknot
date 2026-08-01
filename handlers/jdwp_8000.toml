@@ -1,0 +1,15 @@
+# Java Debug Wire Protocol honeypot on TCP/8000
+# An exposed JDWP port is unauthenticated RCE. We complete the handshake and
+# answer the VirtualMachine command set so jdwp-shellifier-style tools walk all
+# the way to invokeMethod and hand us the command line they wanted to run.
+
+[service]
+port = 8000
+type = "tcp"
+protocol = "jdwp"
+description = "JDWP honeypot — echoes the handshake, logs invokeMethod payloads"
+
+[jdwp]
+description = "Java Debug Wire Protocol (Reference Implementation) version 1.8"
+vm_version = "1.8.0_181"
+vm_name = "OpenJDK 64-Bit Server VM"

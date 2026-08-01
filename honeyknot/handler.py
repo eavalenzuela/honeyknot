@@ -7,11 +7,12 @@ from honeyknot.config import ServiceConfig
 logger = logging.getLogger("honeyknot.handler")
 
 
-def match_request(config: ServiceConfig, data: bytes) -> bytes:
-    """Match incoming data against the service's rules and return the response.
+def match_rule(config: ServiceConfig, data: bytes) -> str | None:
+    """Return the response body of the first matching rule, or None.
 
-    Tries each rule in order. Returns the first matching rule's response,
-    or the default response if nothing matches, or empty bytes as last resort.
+    Distinct from `match_request` because callers that layer other response
+    sources (the HTTP deception site) need to tell "a rule matched" apart
+    from "nothing matched, here's the default".
     """
     try:
         decoded = data.decode(config.encoding, errors="replace")
@@ -21,7 +22,19 @@ def match_request(config: ServiceConfig, data: bytes) -> bytes:
     for rule in config.rules:
         if rule.pattern.search(decoded):
             logger.debug("Rule '%s' matched on port %d", rule.name, config.port)
-            return build_response(config, rule.response)
+            return rule.response
+    return None
+
+
+def match_request(config: ServiceConfig, data: bytes) -> bytes:
+    """Match incoming data against the service's rules and return the response.
+
+    Tries each rule in order. Returns the first matching rule's response,
+    or the default response if nothing matches, or empty bytes as last resort.
+    """
+    matched = match_rule(config, data)
+    if matched is not None:
+        return build_response(config, matched)
 
     # No rule matched — send default response
     if config.default_response:

@@ -1,0 +1,27 @@
+# rsync daemon honeypot on port 873
+
+[service]
+port = 873
+type = "tcp"
+protocol = "rsync"
+description = "rsync daemon honeypot with a juicy module list and challenge-auth credential capture"
+
+[rsync]
+version = "31.0"
+auth = true
+
+[[rsync.modules]]
+name = "backup"
+comment = "Nightly server backups"
+
+[[rsync.modules]]
+name = "www"
+comment = "Web root"
+
+[[rsync.modules]]
+name = "data"
+comment = "Shared datasets"
+
+[[rsync.modules]]
+name = "media"
+comment = "Media archive"

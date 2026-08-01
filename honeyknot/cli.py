@@ -109,6 +109,28 @@ def main():
         help="drop a TCP connection after this many seconds with no data; "
              "0 disables (default: 120)",
     )
+    parser.add_argument(
+        "--fetch-payloads", dest="fetch_payloads", action="store_true",
+        default=False,
+        help="download http(s) URLs seen in captures into the sample store. "
+             "MAKES OUTBOUND REQUESTS to attacker-supplied URLs and stores "
+             "live malware on disk; off by default",
+    )
+    parser.add_argument(
+        "--fetch-max-bytes", dest="fetch_max_bytes", type=int,
+        default=8 * 1024 * 1024,
+        help="byte ceiling per fetched payload (default: 8MB)",
+    )
+    parser.add_argument(
+        "--fetch-timeout", dest="fetch_timeout", type=float, default=15.0,
+        help="socket timeout in seconds for payload fetches (default: 15)",
+    )
+    parser.add_argument(
+        "--fetch-allow-private", dest="fetch_allow_private",
+        action="store_true", default=False,
+        help="allow payload fetches to private/loopback addresses. Lab use "
+             "only: this removes the SSRF guard",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_dir, verbose=args.verbose)
@@ -129,6 +151,10 @@ def main():
         metrics_bind=args.metrics_bind,
         raw_dir_max_bytes=args.raw_dir_max_bytes,
         conn_idle_timeout=args.conn_idle_timeout,
+        fetch_payloads=args.fetch_payloads,
+        fetch_max_bytes=args.fetch_max_bytes,
+        fetch_timeout=args.fetch_timeout,
+        fetch_allow_private=args.fetch_allow_private,
     )
     daemon.start()
 

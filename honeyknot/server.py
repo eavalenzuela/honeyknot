@@ -12,6 +12,8 @@ from pathlib import Path
 from honeyknot.analyzer import scan_payload
 from honeyknot.config import ServiceConfig, load_all_handlers
 from honeyknot.events import EventSink
+from honeyknot.exploits import as_event_fields, classify
+from honeyknot.fetcher import PayloadFetcher
 from honeyknot.ioc import extract_iocs
 from honeyknot.logger import get_port_logger
 from honeyknot.metrics import MetricsRegistry, serve_metrics
@@ -42,12 +44,13 @@ def _finalize_payload(*, data: bytes, peer: tuple, transport: str,
                       events: EventSink | None,
                       samples: SampleStore | None,
                       yara_scanner: YaraScanner | None,
-                      logger: logging.Logger) -> str | None:
-    """Hash, store, analyze, IOC-extract, YARA-scan, update the sidecar.
+                      logger: logging.Logger,
+                      fetcher: PayloadFetcher | None = None) -> str | None:
+    """Hash, store, analyze, IOC-extract, YARA-scan, classify, update sidecar.
 
-    Shared by the TCP capture-close and UDP datagram paths so the two
-    transports can never drift. Returns the sha256 hex digest, or None if
-    the payload was too small to bother with.
+    Shared by the TCP capture-close, UDP datagram, reconstructed-artifact,
+    and fetched-payload paths so none of them can drift. Returns the sha256
+    hex digest, or None if the payload was too small to bother with.
     """
     if len(data) < 4:
         return None
@@ -77,6 +80,22 @@ def _finalize_payload(*, data: bytes, peer: tuple, transport: str,
             peer=peer, sha256=digest, **iocs,
         )
 
+    exploit_hits = classify(data)
+    if exploit_hits:
+        logger.info("Exploit signature from %s: %s",
+                    peer, [h["id"] for h in exploit_hits])
+        if events is not None:
+            events.emit(
+                "exploit_attempt", transport=transport, port=port,
+                protocol=protocol, peer=peer, sha256=digest,
+                **as_event_fields(exploit_hits),
+            )
+
+    # Go and get whatever the session referenced. Opt-in; see fetcher.py for
+    # why it is off by default.
+    if fetcher is not None and iocs and iocs.get("urls"):
+        fetcher.schedule(iocs["urls"], peer=peer, port=port, protocol=protocol)
+
     if is_new and events is not None:
         events.emit(
             "sample_new", transport=transport, port=port, protocol=protocol,
@@ -97,6 +116,7 @@ def _finalize_payload(*, data: bytes, peer: tuple, transport: str,
         samples.update_meta(
             digest, size=len(data), peer=peer,
             iocs=iocs, analyzer=result, yara=yara_matches,
+            exploits=exploit_hits,
         )
 
     return digest
@@ -112,7 +132,8 @@ class PortServer:
                  rate_limiter: RateLimiter | None = None,
                  yara_scanner: YaraScanner | None = None,
                  pcap_enabled: bool = False,
-                 idle_timeout: float = DEFAULT_IDLE_TIMEOUT):
+                 idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+                 fetcher: PayloadFetcher | None = None):
         self.config = config
         self.bind_ip = bind_ip
         self.log_dir = Path(log_dir)
@@ -123,6 +144,7 @@ class PortServer:
         self.yara_scanner = yara_scanner
         self.pcap_enabled = pcap_enabled
         self.idle_timeout = idle_timeout
+        self.fetcher = fetcher
         self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
         self.request_logger = get_port_logger(config.port, log_dir)
         self.handler: ProtocolHandler = get_handler(config)
@@ -223,6 +245,9 @@ class PortServer:
                     **fields,
                 )
 
+        def _store_artifact(*, name: str, data: bytes, kind: str) -> str | None:
+            return self._finalize_artifact(name, data, kind, peer)
+
         ctx = ConnectionContext(
             writer=writer,
             addr=peer,
@@ -231,6 +256,7 @@ class PortServer:
             raw_capture=capture_file,
             pcap_writer=pcap_writer,
             emit_event=_emit_protocol,
+            store_artifact=_store_artifact,
         )
 
         self._emit("connect", peer, capture=str(capture_path) if capture_path else None)
@@ -324,7 +350,30 @@ class PortServer:
             port=self.config.port, protocol=self.config.protocol,
             events=self.events, samples=self.samples,
             yara_scanner=self.yara_scanner, logger=self.logger,
+            fetcher=self.fetcher,
         )
+
+    def _finalize_artifact(self, name: str, data: bytes, kind: str,
+                           peer: tuple) -> str | None:
+        """Store a file a handler reconstructed out of a session.
+
+        The bytes are already inside the raw capture, tangled up with
+        protocol framing. Storing the extracted file separately means it
+        hashes to the same digest as the identical payload delivered any
+        other way, so the sample store deduplicates across transports.
+        """
+        digest = _finalize_payload(
+            data=data, peer=peer, transport="tcp",
+            port=self.config.port, protocol=self.config.protocol,
+            events=self.events, samples=self.samples,
+            yara_scanner=self.yara_scanner, logger=self.logger,
+            fetcher=self.fetcher,
+        )
+        self.logger.info("Artifact %r (%s, %d bytes) from %s sha256=%s",
+                         name, kind, len(data), peer, digest)
+        self._emit("artifact", peer, name=name, kind=kind,
+                   bytes=len(data), sha256=digest)
+        return digest
 
 
 class _UdpProtocol(asyncio.DatagramProtocol):
@@ -353,12 +402,16 @@ class _UdpProtocol(asyncio.DatagramProtocol):
         def _emit_protocol(name: str, **fields) -> None:
             self.owner._emit("protocol", addr, name=name, **fields)
 
+        def _store_artifact(*, name: str, data: bytes, kind: str) -> str | None:
+            return self.owner._finalize_artifact(name, data, kind, addr)
+
         ctx = DatagramContext(
             transport=self.transport,
             addr=addr,
             port=self.owner.config.port,
             request_logger=self.owner.request_logger,
             emit_event=_emit_protocol,
+            store_artifact=_store_artifact,
         )
         digest = self.owner._finalize_datagram(data, addr)
         self.owner._emit("datagram", addr,
@@ -381,7 +434,8 @@ class UdpPortServer:
                  events: EventSink | None = None,
                  samples: SampleStore | None = None,
                  rate_limiter: RateLimiter | None = None,
-                 yara_scanner: YaraScanner | None = None):
+                 yara_scanner: YaraScanner | None = None,
+                 fetcher: PayloadFetcher | None = None):
         self.config = config
         self.bind_ip = bind_ip
         self.log_dir = Path(log_dir)
@@ -389,6 +443,7 @@ class UdpPortServer:
         self.samples = samples
         self.rate_limiter = rate_limiter
         self.yara_scanner = yara_scanner
+        self.fetcher = fetcher
         self.logger = logging.getLogger(f"honeyknot.server.port.{config.port}")
         self.request_logger = get_port_logger(config.port, log_dir)
         self.handler: ProtocolHandler = get_handler(config)
@@ -447,7 +502,24 @@ class UdpPortServer:
             port=self.config.port, protocol=self.config.protocol,
             events=self.events, samples=self.samples,
             yara_scanner=self.yara_scanner, logger=self.logger,
+            fetcher=self.fetcher,
         )
+
+    def _finalize_artifact(self, name: str, data: bytes, kind: str,
+                           peer: tuple) -> str | None:
+        """Store a file a handler reconstructed out of a datagram exchange."""
+        digest = _finalize_payload(
+            data=data, peer=peer, transport="udp",
+            port=self.config.port, protocol=self.config.protocol,
+            events=self.events, samples=self.samples,
+            yara_scanner=self.yara_scanner, logger=self.logger,
+            fetcher=self.fetcher,
+        )
+        self.logger.info("Artifact %r (%s, %d bytes) from %s sha256=%s",
+                         name, kind, len(data), peer, digest)
+        self._emit("artifact", peer, name=name, kind=kind,
+                   bytes=len(data), sha256=digest)
+        return digest
 
 
 class HoneyknotDaemon:
@@ -466,7 +538,11 @@ class HoneyknotDaemon:
                  pcap_enabled: bool = False,
                  metrics_bind: str | None = None,
                  raw_dir_max_bytes: int = 0,
-                 conn_idle_timeout: float = DEFAULT_IDLE_TIMEOUT):
+                 conn_idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+                 fetch_payloads: bool = False,
+                 fetch_max_bytes: int = 8 * 1024 * 1024,
+                 fetch_timeout: float = 15.0,
+                 fetch_allow_private: bool = False):
         self.bind_ip = bind_ip
         self.handler_dir = handler_dir
         self.log_dir = log_dir
@@ -484,6 +560,10 @@ class HoneyknotDaemon:
         self.metrics_bind = metrics_bind
         self.raw_dir_max_bytes = raw_dir_max_bytes
         self.conn_idle_timeout = conn_idle_timeout
+        self.fetch_payloads = fetch_payloads
+        self.fetch_max_bytes = fetch_max_bytes
+        self.fetch_timeout = fetch_timeout
+        self.fetch_allow_private = fetch_allow_private
 
     def start(self) -> None:
         asyncio.run(self._run())
@@ -507,11 +587,36 @@ class HoneyknotDaemon:
         )
         yara_scanner = YaraScanner(self.yara_rules)
 
+        def _on_fetched(*, data: bytes, url: str, peer: tuple,
+                        port: int, protocol: str) -> str | None:
+            """Feed a downloaded payload through the analysis pipeline.
+
+            Transport is "-" because these bytes never crossed one of our
+            listeners: we went and got them.
+            """
+            return _finalize_payload(
+                data=data, peer=peer, transport="-", port=port,
+                protocol=protocol, events=events, samples=samples,
+                yara_scanner=yara_scanner, logger=logger,
+            )
+
+        fetcher = PayloadFetcher(
+            enabled=self.fetch_payloads,
+            events=events,
+            on_payload=_on_fetched,
+            max_bytes=self.fetch_max_bytes,
+            timeout=self.fetch_timeout,
+            allow_private=self.fetch_allow_private,
+        )
+        if self.fetch_payloads:
+            logger.warning("Payload fetching is ENABLED: honeyknot will make "
+                           "outbound requests to attacker-supplied URLs")
+
         # Keyed by port for hot-reload comparison.
         servers: dict[int, PortServer | UdpPortServer] = {}
         for cfg in configs:
             servers[cfg.port] = self._build_server(
-                cfg, events, samples, limiter, yara_scanner,
+                cfg, events, samples, limiter, yara_scanner, fetcher,
             )
 
         await asyncio.gather(*(s.start() for s in servers.values()))
@@ -557,7 +662,7 @@ class HoneyknotDaemon:
                 reload_event.clear()
                 await self._reload_handlers(
                     servers, supervisors, events, samples, limiter,
-                    yara_scanner, stop_event,
+                    yara_scanner, stop_event, fetcher,
                 )
 
         reload_task = asyncio.create_task(_reload_loop())
@@ -586,6 +691,7 @@ class HoneyknotDaemon:
         await asyncio.gather(*(s.stop() for s in servers.values()),
                              return_exceptions=True)
         await asyncio.gather(*supervisors.values(), return_exceptions=True)
+        await fetcher.close()
 
         if metrics_server is not None:
             metrics_server.close()
@@ -594,21 +700,23 @@ class HoneyknotDaemon:
         events.close()
         logger.info("Honeyknot shut down")
 
-    def _build_server(self, cfg, events, samples, limiter, yara_scanner):
+    def _build_server(self, cfg, events, samples, limiter, yara_scanner,
+                      fetcher=None):
         if cfg.transport == "udp":
             return UdpPortServer(
                 cfg, self.bind_ip, self.log_dir, events, samples,
-                limiter, yara_scanner,
+                limiter, yara_scanner, fetcher=fetcher,
             )
         return PortServer(
             cfg, self.bind_ip, self.log_dir,
             self.max_capture_bytes, events, samples,
             limiter, yara_scanner, pcap_enabled=self.pcap_enabled,
-            idle_timeout=self.conn_idle_timeout,
+            idle_timeout=self.conn_idle_timeout, fetcher=fetcher,
         )
 
     async def _reload_handlers(self, servers, supervisors, events, samples,
-                               limiter, yara_scanner, stop_event):
+                               limiter, yara_scanner, stop_event,
+                               fetcher=None):
         """Diff the handler directory against the live set and reconcile.
 
         Changed configs and removed ports stop; new ports start. Unchanged
@@ -654,7 +762,8 @@ class HoneyknotDaemon:
         # Start new and changed listeners.
         for port in added + changed:
             cfg = new_by_port[port]
-            srv = self._build_server(cfg, events, samples, limiter, yara_scanner)
+            srv = self._build_server(cfg, events, samples, limiter,
+                                     yara_scanner, fetcher)
             await srv.start()
             servers[port] = srv
             supervisors[port] = asyncio.create_task(

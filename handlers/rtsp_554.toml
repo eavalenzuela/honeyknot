@@ -1,0 +1,11 @@
+# RTSP honeypot on port 554 — farms IP-camera botnet credential sprays.
+
+[service]
+port = 554
+type = "tcp"
+protocol = "rtsp"
+description = "RTSP honeypot presenting as a generic IP camera"
+
+[rtsp]
+realm = "IP Camera"
+server = "Rtsp Server/2.0"

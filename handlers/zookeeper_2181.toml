@@ -1,0 +1,13 @@
+# ZooKeeper honeypot on port 2181
+
+[service]
+port = 2181
+type = "tcp"
+protocol = "zookeeper"
+description = "ZooKeeper honeypot answering four-letter-word admin commands and the binary handshake"
+
+[zookeeper]
+version = "3.4.13-2d71af4dbe22557fda74f9a9b4309b15a7487f03, built on 06/29/2018 04:05 GMT"
+mode = "standalone"
+node_count = 27
+hostname = "zk1"

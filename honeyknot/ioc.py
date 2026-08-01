@@ -111,7 +111,7 @@ def extract_iocs(data: bytes) -> dict[str, list[str]] | None:
     downloads: list[bytes] = []
     shell: list[bytes] = []
 
-    for layer in _decoded_layers(data):
+    for layer in decoded_layers(data):
         # Per-layer printable gate: skip mostly-binary layers entirely to
         # avoid hallucinating IPs/URLs out of random bytes. Decoded layers
         # from gzip/base64 re-qualify here on their own merits.
@@ -139,8 +139,12 @@ def extract_iocs(data: bytes) -> dict[str, list[str]] | None:
     return result
 
 
-def _decoded_layers(data: bytes):
+def decoded_layers(data: bytes):
     """Yield `data` and up to one decoded layer of gzip/zlib/base64.
+
+    Public because `exploits.py` needs the same peeling before running its
+    signature set — an exploit payload gets base64'd exactly as often as a
+    dropper URL does.
 
     Gzip/zlib magic is searched for anywhere in the buffer, not just at
     position 0, because attacker payloads typically arrive inside HTTP

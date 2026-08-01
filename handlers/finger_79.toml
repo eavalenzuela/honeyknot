@@ -1,0 +1,25 @@
+# finger honeypot on port 79
+
+[service]
+port = 79
+type = "tcp"
+protocol = "finger"
+description = "finger honeypot for user enumeration and relay-bounce detection"
+
+[finger]
+hostname = "srv01"
+
+[[finger.users]]
+name = "root"
+fullname = "root"
+shell = "/bin/bash"
+
+[[finger.users]]
+name = "admin"
+fullname = "System Administrator"
+shell = "/bin/bash"
+
+[[finger.users]]
+name = "deploy"
+fullname = "Deploy Service"
+shell = "/bin/sh"

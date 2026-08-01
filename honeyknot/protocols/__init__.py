@@ -8,6 +8,7 @@ per-connection state via a `ConnectionContext`.
 
 from honeyknot.config import ServiceConfig
 from honeyknot.protocols.adb import ADBHandler
+from honeyknot.protocols.amqp import AMQPHandler
 from honeyknot.protocols.bacnet import BACnetHandler
 from honeyknot.protocols.base import (
     ConnectionContext,
@@ -17,10 +18,12 @@ from honeyknot.protocols.base import (
 from honeyknot.protocols.chargen import ChargenHandler
 from honeyknot.protocols.coap import CoAPHandler
 from honeyknot.protocols.dns import DNSHandler
+from honeyknot.protocols.finger import FingerHandler
 from honeyknot.protocols.ftp import FTPHandler
 from honeyknot.protocols.http import HTTPHandler
 from honeyknot.protocols.imap import IMAPHandler
 from honeyknot.protocols.ipmi import IPMIHandler
+from honeyknot.protocols.jdwp import JDWPHandler
 from honeyknot.protocols.ldap import LDAPHandler
 from honeyknot.protocols.memcached import MemcachedHandler
 from honeyknot.protocols.modbus import ModbusHandler
@@ -34,20 +37,27 @@ from honeyknot.protocols.postgres import PostgresHandler
 from honeyknot.protocols.rdp import RDPHandler
 from honeyknot.protocols.redis import RedisHandler
 from honeyknot.protocols.regex import RegexHandler
+from honeyknot.protocols.rmi import RMIHandler
+from honeyknot.protocols.rpcbind import RPCBindHandler
+from honeyknot.protocols.rsync import RsyncHandler
+from honeyknot.protocols.rtsp import RTSPHandler
 from honeyknot.protocols.s7 import S7Handler
 from honeyknot.protocols.sip import SIPHandler
 from honeyknot.protocols.smb import SMBHandler
 from honeyknot.protocols.smtp import SMTPHandler
 from honeyknot.protocols.snmp import SNMPHandler
+from honeyknot.protocols.socks import SocksHandler
 from honeyknot.protocols.ssdp import SSDPHandler
 from honeyknot.protocols.ssh import SSHHandler
 from honeyknot.protocols.telnet import TelnetHandler
 from honeyknot.protocols.tftp import TFTPHandler
 from honeyknot.protocols.vnc import VNCHandler
 from honeyknot.protocols.wsd import WSDHandler
+from honeyknot.protocols.zookeeper import ZooKeeperHandler
 
 __all__ = [
     "ADBHandler",
+    "AMQPHandler",
     "BACnetHandler",
     "ChargenHandler",
     "CoAPHandler",
@@ -55,9 +65,11 @@ __all__ = [
     "DNSHandler",
     "DatagramContext",
     "FTPHandler",
+    "FingerHandler",
     "HTTPHandler",
     "IMAPHandler",
     "IPMIHandler",
+    "JDWPHandler",
     "LDAPHandler",
     "MQTTHandler",
     "MSSQLHandler",
@@ -70,8 +82,12 @@ __all__ = [
     "PostgresHandler",
     "ProtocolHandler",
     "RDPHandler",
+    "RMIHandler",
+    "RPCBindHandler",
+    "RTSPHandler",
     "RedisHandler",
     "RegexHandler",
+    "RsyncHandler",
     "S7Handler",
     "SIPHandler",
     "SMBHandler",
@@ -79,10 +95,12 @@ __all__ = [
     "SNMPHandler",
     "SSDPHandler",
     "SSHHandler",
+    "SocksHandler",
     "TFTPHandler",
     "TelnetHandler",
     "VNCHandler",
     "WSDHandler",
+    "ZooKeeperHandler",
     "get_handler",
 ]
 
@@ -120,6 +138,15 @@ _REGISTRY: dict[str, type[ProtocolHandler]] = {
     "ldap": LDAPHandler,
     "tftp": TFTPHandler,
     "ntp": NTPHandler,
+    "amqp": AMQPHandler,
+    "finger": FingerHandler,
+    "jdwp": JDWPHandler,
+    "rmi": RMIHandler,
+    "rpcbind": RPCBindHandler,
+    "rsync": RsyncHandler,
+    "rtsp": RTSPHandler,
+    "socks": SocksHandler,
+    "zookeeper": ZooKeeperHandler,
 }
 
 

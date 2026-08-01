@@ -1,0 +1,8 @@
+# SOCKS open-proxy honeypot on port 1080 — completes the handshake, relays
+# nothing, and records the destination the client asked for.
+
+[service]
+port = 1080
+type = "tcp"
+protocol = "socks"
+description = "SOCKS4/4a/5 open-proxy honeypot"

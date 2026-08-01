@@ -1,0 +1,11 @@
+# rpcbind/portmap honeypot on UDP/111
+
+[service]
+port = 111
+protocol = "rpcbind"
+description = "ONC RPC portmapper — logs GETPORT/DUMP/CALLIT recon, refuses to amplify"
+
+[rpcbind]
+# Port advertised in GETPORT replies. 0 = "program not registered" (realistic
+# for a hardened host); set to another honeypot port to steer attackers there.
+getport_port = 0

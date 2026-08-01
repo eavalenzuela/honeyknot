@@ -67,7 +67,8 @@ class SampleStore:
                     peer: tuple | None = None,
                     iocs: dict | None = None,
                     analyzer: dict | None = None,
-                    yara: list | None = None) -> None:
+                    yara: list | None = None,
+                    exploits: list | None = None) -> None:
         """Merge a new hit's metadata into `<sha>.meta.json`.
 
         Safe to call concurrently from the asyncio loop; a threading.Lock
@@ -117,6 +118,19 @@ class SampleStore:
                     if m.get("rule") not in existing:
                         yara_bucket.append(m)
                         existing.add(m.get("rule"))
+
+            if exploits:
+                # Keyed on (id, title): the same sample delivered through two
+                # different vehicles should list both.
+                bucket = meta.setdefault("exploits", [])
+                seen = {(e.get("id"), e.get("title")) for e in bucket}
+                for hit in exploits:
+                    key = (hit.get("id"), hit.get("title"))
+                    if key in seen or len(bucket) >= MAX_IOCS_PER_KIND:
+                        continue
+                    bucket.append({k: v for k, v in hit.items()
+                                   if k != "offset"})
+                    seen.add(key)
 
             self._save_meta_atomic(meta_path, meta)
 

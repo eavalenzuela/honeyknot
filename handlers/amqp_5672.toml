@@ -1,0 +1,10 @@
+# AMQP 0-9-1 honeypot on TCP/5672
+
+[service]
+port = 5672
+protocol = "amqp"
+description = "RabbitMQ broker mimic — captures SASL credentials and method activity"
+
+[amqp]
+product = "RabbitMQ"
+version = "3.8.9"

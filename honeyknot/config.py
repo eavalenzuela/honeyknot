@@ -49,10 +49,13 @@ VALID_PROTOCOLS = {
     "imap", "pop3", "s7", "wsd",
     "bacnet", "adb", "ldap",
     "tftp", "ntp",
+    "rtsp", "socks", "jdwp", "rmi", "zookeeper", "rsync", "finger",
+    "rpcbind", "amqp",
 }
 VALID_TRANSPORTS = {"tcp", "udp"}
 UDP_PROTOCOLS = {"dns", "snmp", "ssdp", "netbios_ns", "chargen", "memcached",
-                 "sip", "ipmi", "coap", "wsd", "bacnet", "tftp", "ntp"}
+                 "sip", "ipmi", "coap", "wsd", "bacnet", "tftp", "ntp",
+                 "rpcbind"}
 
 
 def load_handler(path: Path) -> ServiceConfig:

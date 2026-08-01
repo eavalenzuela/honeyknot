@@ -1,0 +1,10 @@
+# Java RMI registry honeypot on TCP/1099
+# Completes the JRMP handshake so ysoserial gadget chains and JNDI/Log4Shell
+# second-stage fetches get delivered in full, then mines the serialized stream
+# for class names and known gadget markers. Nothing is ever deserialized.
+
+[service]
+port = 1099
+type = "tcp"
+protocol = "rmi"
+description = "RMI registry honeypot — captures JRMP serialized object graphs"
